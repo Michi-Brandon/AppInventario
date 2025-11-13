@@ -60,15 +60,17 @@ class VerificacionTab(QWidget):
         # Editar esta lista para agregar o quitar operadores disponibles en la UI.
         self.operadores = [
             "-- Seleccione --",
-            "Bastián",
-            "Camila",
-            "Mauricio",
-            "Paula",
+            "Operador1",
+            "Operador2",
+            "Operador3",
+            "Operador4",
         ]
         self.df_multivende = None
         self.df_tabla = pd.DataFrame()
         self.df_actual = pd.DataFrame()
         self.vista_esquema = False
+        self.codigo_actual_mostrado = ""
+        self.codigo_actual_busqueda = ""
 
         self._build_ui()
 
@@ -168,6 +170,7 @@ class VerificacionTab(QWidget):
         pie = QHBoxLayout()
         self.btn_generar_salida = QPushButton("Generar Salida")
         self.btn_imprimir = QPushButton("Imprimir etiqueta")
+        self.btn_generar_salida.clicked.connect(self.generar_salida)
         self.btn_imprimir.clicked.connect(self.imprimir_etiqueta_automatica)
         pie.addStretch()
         pie.addWidget(self.btn_generar_salida)
@@ -267,12 +270,15 @@ class VerificacionTab(QWidget):
         if not codigo:
             return
 
+        codigo_original = codigo
+        codigo_busqueda = codigo
+
         if len(codigo) == 8:
             self.procesar_codigo_producto(codigo)
             return
 
         if len(codigo) == 10:
-            codigo = codigo[:9]
+            codigo_busqueda = codigo[:9]
         elif len(codigo) not in [13, 16]:
             print(f"[Aviso] Código de venta con longitud no estándar: {len(codigo)} → {codigo}")
 
@@ -280,11 +286,14 @@ class VerificacionTab(QWidget):
             QMessageBox.warning(self, "Sin archivo", "Primero carga el archivo de Multivende (menú Archivo).")
             return
 
-        self.lbl_codigo.setText(f"Código venta: {codigo}")
-        filas = self.df_multivende[self.df_multivende.iloc[:, 7].astype(str) == codigo]
+        filas = self.df_multivende[self.df_multivende.iloc[:, 7].astype(str) == codigo_busqueda]
         if filas.empty:
-            QMessageBox.information(self, "Sin resultados", f"No se encontraron filas con el código {codigo}.")
+            QMessageBox.information(self, "Sin resultados", f"No se encontraron filas con el código {codigo_original}.")
             return
+
+        self.codigo_actual_mostrado = codigo_original
+        self.codigo_actual_busqueda = codigo_busqueda
+        self.lbl_codigo.setText(f"Código venta: {codigo_original}")
 
         self.df_actual = filas.copy()
         self.df_actual["Escaneado"] = 0
@@ -360,10 +369,13 @@ class VerificacionTab(QWidget):
         else:
             df_imp = pd.DataFrame(columns=["CódigoVenta", "Fecha", "Estado"])
 
-        codigo_actual = self.lbl_codigo.text().replace("Código venta:", "").strip()
+        codigo_actual = self.codigo_actual_mostrado or self.lbl_codigo.text().replace("Código venta:", "").strip()
+        codigo_busqueda = self.codigo_actual_busqueda or codigo_actual
         estado = "No impreso"
-        if codigo_actual in df_imp["CódigoVenta"].astype(str).values:
-            estado = df_imp.loc[df_imp["CódigoVenta"].astype(str) == codigo_actual, "Estado"].iloc[-1]
+        for codigo_ref in [codigo_actual, codigo_busqueda]:
+            if codigo_ref and codigo_ref in df_imp["CódigoVenta"].astype(str).values:
+                estado = df_imp.loc[df_imp["CódigoVenta"].astype(str) == codigo_ref, "Estado"].iloc[-1]
+                break
 
         df["Etiqueta"] = estado
 
@@ -406,7 +418,8 @@ class VerificacionTab(QWidget):
         self.btn_imprimir.setEnabled(False)
         QApplication.processEvents()
 
-        codigo_venta = self.lbl_codigo.text().replace("Código venta:", "").strip()
+        codigo_mostrado = self.codigo_actual_mostrado or self.lbl_codigo.text().replace("Código venta:", "").strip()
+        codigo_venta = self.codigo_actual_busqueda or codigo_mostrado
         if not codigo_venta:
             QMessageBox.warning(self, "Sin código", "Primero escanee una nota de venta antes de imprimir.")
             return
@@ -687,7 +700,7 @@ class VerificacionTab(QWidget):
         )
 
         nuevo = pd.DataFrame(
-            [[codigo_venta, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), estado]],
+            [[codigo_mostrado, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), estado]],
             columns=["CódigoVenta", "Fecha", "Estado"],
         )
         df_registro = pd.concat([df_registro, nuevo], ignore_index=True)
@@ -698,6 +711,59 @@ class VerificacionTab(QWidget):
 
         if hasattr(self, "df_tabla"):
             self.mostrar_tabla(self.df_tabla)
+
+    def generar_salida(self):
+        if getattr(self, "df_tabla", None) is None or self.df_tabla.empty:
+            QMessageBox.warning(self, "Sin datos", "Primero escanee una nota de venta y sus productos.")
+            return
+
+        codigo_venta = self.codigo_actual_mostrado or self.lbl_codigo.text().replace("Código venta:", "").strip()
+        if not codigo_venta:
+            QMessageBox.warning(self, "Sin nota", "Debe seleccionar una nota de venta antes de generar la salida.")
+            return
+
+        operador = self.operador_combo.currentText()
+        if operador == "-- Seleccione --":
+            QMessageBox.warning(self, "Operador requerido", "Seleccione el operador que genera la salida.")
+            return
+
+        pendientes = self.df_tabla[self.df_tabla["Escaneado"] != self.df_tabla["Cantidad"]]
+        if not pendientes.empty:
+            QMessageBox.warning(
+                self,
+                "Escaneo incompleto",
+                "Para generar la salida, todos los productos deben estar completamente escaneados.",
+            )
+            return
+
+        movimientos_dir = os.path.join(self.config["carpeta_multivende"], "Movimientos")
+        os.makedirs(movimientos_dir, exist_ok=True)
+        movimientos_path = os.path.join(movimientos_dir, "movimientos.xlsx")
+
+        columnas = ["Nota de Venta", "Codigo", "Cantidad", "Operador", "Fecha"]
+
+        if os.path.exists(movimientos_path):
+            df_mov = pd.read_excel(movimientos_path)
+        else:
+            df_mov = pd.DataFrame(columns=columnas)
+
+        nuevas_filas = []
+        fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for _, fila in self.df_tabla.iterrows():
+            nuevas_filas.append(
+                {
+                    "Nota de Venta": codigo_venta,
+                    "Codigo": fila["Código Producto"],
+                    "Cantidad": int(fila["Escaneado"]),
+                    "Operador": operador,
+                    "Fecha": fecha_actual,
+                }
+            )
+
+        df_mov = pd.concat([df_mov, pd.DataFrame(nuevas_filas, columns=columnas)], ignore_index=True)
+        df_mov.to_excel(movimientos_path, index=False)
+
+        QMessageBox.information(self, "Salida generada", "La salida fue registrada correctamente.")
 
     def cambiar_vista(self, esquema: bool):
         self.vista_esquema = esquema
