@@ -64,7 +64,7 @@ class VentanaPrincipal(QMainWindow):
             on_entrada_registrada=self.movimientos_tab.cargar_movimientos,
         )
         self.bodegas_tab = BodegasTab(self)
-        self.stock_tab = StockTab(self)
+        self.stock_tab = StockTab(self.config, self)
         self.logueo_tab = LogueoTab(self)
 
         self.tabs.addTab(self.verificacion_tab, "Verificación de pedidos")
@@ -88,6 +88,9 @@ class VentanaPrincipal(QMainWindow):
         self.verificacion_tab.configurar_foco_codigo(es_verificacion)
         if es_verificacion:
             self.verificacion_tab.enfocar_codigo_si_principal()
+        if self.tabs.currentWidget() is self.stock_tab:
+            self.stock_tab.actualizar_stock()
+            self.stock_tab.enfocar_busqueda()
 
 
 if __name__ == "__main__":
