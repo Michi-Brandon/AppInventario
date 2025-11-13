@@ -1,0 +1,11 @@
+# Ignorar build y dist completos
+/dist/
+/build/
+
+# Ignorar ejecutables
+*.exe
+*.pkg
+
+# Ignorar temporales de Python
+__pycache__/
+*.pyc
