@@ -52,8 +52,12 @@ class VentanaPrincipal(QMainWindow):
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
 
-        self.verificacion_tab = VerificacionTab(self.config, self)
-        self.movimientos_tab = MovimientosTab(self)
+        self.movimientos_tab = MovimientosTab(self.config, self)
+        self.verificacion_tab = VerificacionTab(
+            self.config,
+            self,
+            on_salida_generada=self.movimientos_tab.cargar_movimientos,
+        )
         self.entradas_tab = EntradasTab(self)
         self.bodegas_tab = BodegasTab(self)
         self.stock_tab = StockTab(self)
@@ -68,6 +72,7 @@ class VentanaPrincipal(QMainWindow):
 
         self.menu_accion_cargar.triggered.connect(self.verificacion_tab.cargar_excel)
         self.verificacion_tab.cargar_excel(mostrar_mensaje=True)
+        self._enfocar_codigo_si_principal(self.tabs.currentIndex())
 
     def _configurar_actualizacion(self):
         self.timer_actualizacion = QTimer(self)
@@ -75,7 +80,9 @@ class VentanaPrincipal(QMainWindow):
         self.timer_actualizacion.start(60_000)
 
     def _enfocar_codigo_si_principal(self, index):  # noqa: ARG002
-        if self.tabs.currentWidget() is self.verificacion_tab:
+        es_verificacion = self.tabs.currentWidget() is self.verificacion_tab
+        self.verificacion_tab.configurar_foco_codigo(es_verificacion)
+        if es_verificacion:
             self.verificacion_tab.enfocar_codigo_si_principal()
 
 
@@ -84,4 +91,3 @@ if __name__ == "__main__":
     ventana = VentanaPrincipal()
     ventana.show()
     sys.exit(app.exec())
-

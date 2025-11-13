@@ -4,6 +4,7 @@ import socket
 import subprocess
 import time
 from datetime import datetime
+from typing import Callable, Optional
 
 import pandas as pd
 from PyQt6.QtCore import QEvent, QTimer, Qt
@@ -35,28 +36,42 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 
 class LineaCodigoFija(QLineEdit):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._force_focus = True
+
+    def set_force_focus(self, enabled: bool):
+        self._force_focus = enabled
+        if enabled:
+            self.setFocus()
+
     def focusOutEvent(self, event):
-        # Ignora pérdida de foco, lo recupera inmediatamente
-        self.setFocus()
-        event.ignore()
+        # Ignora pérdida de foco cuando corresponde
+        if self._force_focus:
+            self.setFocus()
+            event.ignore()
+        else:
+            super().focusOutEvent(event)
 
     def mousePressEvent(self, event):
-        # Permite escribir normalmente, pero fuerza foco de nuevo
-        self.setFocus()
+        # Permite escribir normalmente, pero fuerza foco de nuevo si está habilitado
+        if self._force_focus:
+            self.setFocus()
         super().mousePressEvent(event)
 
     def event(self, e):
-        # Evita que otras ventanas roben el foco
-        if e.type() == QEvent.Type.FocusOut:
+        # Evita que otras ventanas roben el foco solo cuando está habilitado
+        if self._force_focus and e.type() == QEvent.Type.FocusOut:
             self.setFocus()
             return True
         return super().event(e)
 
 
 class VerificacionTab(QWidget):
-    def __init__(self, config: dict, parent=None):
+    def __init__(self, config: dict, parent=None, on_salida_generada: Optional[Callable[[], None]] = None):
         super().__init__(parent)
         self.config = config
+        self.on_salida_generada = on_salida_generada
         # Editar esta lista para agregar o quitar operadores disponibles en la UI.
         self.operadores = [
             "-- Seleccione --",
@@ -355,6 +370,10 @@ class VerificacionTab(QWidget):
             self.txt_incorrectos.verticalScrollBar().setValue(
                 self.txt_incorrectos.verticalScrollBar().maximum()
             )
+
+    def configurar_foco_codigo(self, activo: bool):
+        if hasattr(self, "input_codigo"):
+            self.input_codigo.set_force_focus(activo)
 
     def enfocar_codigo_si_principal(self, index=None):  # noqa: ARG002
         if hasattr(self, "input_codigo"):
@@ -764,6 +783,8 @@ class VerificacionTab(QWidget):
         df_mov.to_excel(movimientos_path, index=False)
 
         QMessageBox.information(self, "Salida generada", "La salida fue registrada correctamente.")
+        if self.on_salida_generada:
+            self.on_salida_generada()
 
     def cambiar_vista(self, esquema: bool):
         self.vista_esquema = esquema
