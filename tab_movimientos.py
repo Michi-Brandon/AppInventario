@@ -26,7 +26,15 @@ class MovimientosTab(QWidget):
     def __init__(self, config: dict, parent=None):
         super().__init__(parent)
         self.config = config
-        self.columnas = ["Nota de Venta", "Codigo", "Cantidad", "Operador", "Fecha"]
+        self.columnas = [
+            "Tipo Movimiento",
+            "Nota de Venta",
+            "Orden de Compra",
+            "Codigo",
+            "Cantidad",
+            "Operador",
+            "Fecha",
+        ]
         self.rango_activo = "dia"
         self.movimientos_path = os.path.join(
             self.config.get("carpeta_multivende", ""),

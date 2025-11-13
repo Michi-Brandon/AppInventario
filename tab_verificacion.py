@@ -759,19 +759,33 @@ class VerificacionTab(QWidget):
         os.makedirs(movimientos_dir, exist_ok=True)
         movimientos_path = os.path.join(movimientos_dir, "movimientos.xlsx")
 
-        columnas = ["Nota de Venta", "Codigo", "Cantidad", "Operador", "Fecha"]
+        columnas = [
+            "Tipo Movimiento",
+            "Nota de Venta",
+            "Orden de Compra",
+            "Codigo",
+            "Cantidad",
+            "Operador",
+            "Fecha",
+        ]
 
         if os.path.exists(movimientos_path):
             df_mov = pd.read_excel(movimientos_path)
         else:
             df_mov = pd.DataFrame(columns=columnas)
+        for columna in columnas:
+            if columna not in df_mov.columns:
+                df_mov[columna] = ""
+        df_mov = df_mov[columnas].copy()
 
         nuevas_filas = []
         fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         for _, fila in self.df_tabla.iterrows():
             nuevas_filas.append(
                 {
+                    "Tipo Movimiento": "SALIDA",
                     "Nota de Venta": codigo_venta,
+                    "Orden de Compra": "",
                     "Codigo": fila["Código Producto"],
                     "Cantidad": int(fila["Escaneado"]),
                     "Operador": operador,
