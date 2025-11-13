@@ -58,7 +58,11 @@ class VentanaPrincipal(QMainWindow):
             self,
             on_salida_generada=self.movimientos_tab.cargar_movimientos,
         )
-        self.entradas_tab = EntradasTab(self)
+        self.entradas_tab = EntradasTab(
+            self.config,
+            self,
+            on_entrada_registrada=self.movimientos_tab.cargar_movimientos,
+        )
         self.bodegas_tab = BodegasTab(self)
         self.stock_tab = StockTab(self)
         self.logueo_tab = LogueoTab(self)

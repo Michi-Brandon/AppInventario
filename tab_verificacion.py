@@ -34,6 +34,9 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import StaleElementReferenceException
 from webdriver_manager.chrome import ChromeDriverManager
 
+from movimientos_utils import guardar_movimientos_excel
+from operadores import OPERADORES
+
 
 class LineaCodigoFija(QLineEdit):
     def __init__(self, *args, **kwargs):
@@ -72,14 +75,8 @@ class VerificacionTab(QWidget):
         super().__init__(parent)
         self.config = config
         self.on_salida_generada = on_salida_generada
-        # Editar esta lista para agregar o quitar operadores disponibles en la UI.
-        self.operadores = [
-            "-- Seleccione --",
-            "Operador1",
-            "Operador2",
-            "Operador3",
-            "Operador4",
-        ]
+        # Editar operadores.py para agregar o quitar operadores disponibles en la UI.
+        self.operadores = list(OPERADORES)
         self.df_multivende = None
         self.df_tabla = pd.DataFrame()
         self.df_actual = pd.DataFrame()
@@ -793,8 +790,10 @@ class VerificacionTab(QWidget):
                 }
             )
 
-        df_mov = pd.concat([df_mov, pd.DataFrame(nuevas_filas, columns=columnas)], ignore_index=True)
-        df_mov.to_excel(movimientos_path, index=False)
+        for fila in nuevas_filas:
+            df_mov.loc[len(df_mov)] = fila
+
+        guardar_movimientos_excel(df_mov, movimientos_path)
 
         QMessageBox.information(self, "Salida generada", "La salida fue registrada correctamente.")
         if self.on_salida_generada:
