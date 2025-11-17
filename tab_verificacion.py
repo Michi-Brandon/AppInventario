@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from ml_api_client import NonPrintableError, descargar_etiqueta_mercadolibre
 from selenium import webdriver
 from selenium.webdriver import ActionChains
 from selenium.webdriver.chrome.options import Options
@@ -456,6 +457,37 @@ class VerificacionTab(QWidget):
             QMessageBox.warning(self, "Canal desconocido", f"No se reconoce el canal: {canal}")
             return
 
+        # --- MercadoLibre vía API (sin Selenium) ---
+        if plataforma == "mercadolibre":
+            estado = "Error"
+            try:
+                etiqueta_path = descargar_etiqueta_mercadolibre(order_id=codigo_venta, response_type="zpl2")
+                print(f"M: Etiqueta API guardada en {etiqueta_path}")
+                estado = "Impreso"
+                self.lbl_estado_impresion.setText("Impreso")
+                self.lbl_estado_impresion.setStyleSheet("color: green; font-weight: bold; font-size: 13px;")
+            except NonPrintableError as exc:
+                QMessageBox.information(
+                    self,
+                    "Etiqueta ya emitida",
+                    f"Mercado Libre indica que ya se emitió la etiqueta (NON_PRINTABLE).\n{exc}",
+                )
+                estado = "Error"
+                self.lbl_estado_impresion.setText("Error")
+                self.lbl_estado_impresion.setStyleSheet("color: red; font-weight: bold; font-size: 13px;")
+            except Exception as exc:  # noqa: BLE001
+                print("M: Error al obtener etiqueta vía API:", exc)
+                estado = "Error"
+                self.lbl_estado_impresion.setText("Error")
+                self.lbl_estado_impresion.setStyleSheet("color: red; font-weight: bold; font-size: 13px;")
+
+            self._registrar_impresion(codigo_mostrado, estado)
+            QTimer.singleShot(3000, lambda: self.lbl_estado_impresion.hide())
+            self.btn_imprimir.setEnabled(True)
+            if hasattr(self, "df_tabla"):
+                self.mostrar_tabla(self.df_tabla)
+            return
+
         perfiles = {
             "mercadolibre": (
                 r"C:\Users\bmonsalve\AppData\Local\Google\Chrome\Selenium",
@@ -705,23 +737,7 @@ class VerificacionTab(QWidget):
             print("Error en Selenium:", e)
             estado = "Error"
 
-        etiquetas_path = os.path.join(self.config["carpeta_multivende"], "Etiquetas")
-        os.makedirs(etiquetas_path, exist_ok=True)
-        registro_path = os.path.join(etiquetas_path, "registro_impresiones.xlsx")
-
-        df_registro = (
-            pd.read_excel(registro_path)
-            if os.path.exists(registro_path)
-            else pd.DataFrame(columns=["CódigoVenta", "Fecha", "Estado"])
-        )
-
-        nuevo = pd.DataFrame(
-            [[codigo_mostrado, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), estado]],
-            columns=["CódigoVenta", "Fecha", "Estado"],
-        )
-        df_registro = pd.concat([df_registro, nuevo], ignore_index=True)
-        df_registro.to_excel(registro_path, index=False)
-
+        self._registrar_impresion(codigo_mostrado, estado)
         QTimer.singleShot(3000, lambda: self.lbl_estado_impresion.hide())
         self.btn_imprimir.setEnabled(True)
 
@@ -803,6 +819,24 @@ class VerificacionTab(QWidget):
         self.vista_esquema = esquema
         self.btn_tabla.setChecked(not esquema)
         self.btn_esquema.setChecked(esquema)
+
+    def _registrar_impresion(self, codigo_venta: str, estado: str):
+        etiquetas_path = os.path.join(self.config["carpeta_multivende"], "Etiquetas")
+        os.makedirs(etiquetas_path, exist_ok=True)
+        registro_path = os.path.join(etiquetas_path, "registro_impresiones.xlsx")
+
+        df_registro = (
+            pd.read_excel(registro_path)
+            if os.path.exists(registro_path)
+            else pd.DataFrame(columns=["CódigoVenta", "Fecha", "Estado"])
+        )
+
+        nuevo = pd.DataFrame(
+            [[codigo_venta, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), estado]],
+            columns=["CódigoVenta", "Fecha", "Estado"],
+        )
+        df_registro = pd.concat([df_registro, nuevo], ignore_index=True)
+        df_registro.to_excel(registro_path, index=False)
 
     def _esperar_filas(self, driver, css_selector="table tbody tr, tr", timeout=10, min_text_len=2):
         """Espera hasta timeout a que existan filas visibles con texto."""
