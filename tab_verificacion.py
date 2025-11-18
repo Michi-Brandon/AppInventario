@@ -84,6 +84,7 @@ class VerificacionTab(QWidget):
         self.vista_esquema = False
         self.codigo_actual_mostrado = ""
         self.codigo_actual_busqueda = ""
+        self.nombre_cliente_actual = ""
 
         self._build_ui()
 
@@ -307,6 +308,7 @@ class VerificacionTab(QWidget):
         self.codigo_actual_mostrado = codigo_original
         self.codigo_actual_busqueda = codigo_busqueda
         self.lbl_codigo.setText(f"Código venta: {codigo_original}")
+        self.nombre_cliente_actual = str(filas.iloc[0, 9])
 
         self.df_actual = filas.copy()
         self.df_actual["Escaneado"] = 0
@@ -476,10 +478,18 @@ class VerificacionTab(QWidget):
                 self.lbl_estado_impresion.setText("Error")
                 self.lbl_estado_impresion.setStyleSheet("color: red; font-weight: bold; font-size: 13px;")
             except Exception as exc:  # noqa: BLE001
-                print("M: Error al obtener etiqueta vía API:", exc)
-                estado = "Error"
-                self.lbl_estado_impresion.setText("Error")
-                self.lbl_estado_impresion.setStyleSheet("color: red; font-weight: bold; font-size: 13px;")
+                msg = str(exc)
+                if "INVALID_SHIPMENT_MODE" in msg or "ME1" in msg:
+                    print("M: Shipment ME1, intentando vía Zipnova por nombre de cliente...")
+                    estado = self._imprimir_zipnova_por_cliente(
+                        nombre_cliente=self.nombre_cliente_actual,
+                        codigo_mostrado=codigo_mostrado,
+                    )
+                else:
+                    print("M: Error al obtener etiqueta vía API:", exc)
+                    estado = "Error"
+                    self.lbl_estado_impresion.setText("Error")
+                    self.lbl_estado_impresion.setStyleSheet("color: red; font-weight: bold; font-size: 13px;")
 
             self._registrar_impresion(codigo_mostrado, estado)
             QTimer.singleShot(3000, lambda: self.lbl_estado_impresion.hide())
@@ -580,7 +590,7 @@ class VerificacionTab(QWidget):
                     self.lbl_estado_impresion.setText("Error")
                     self.lbl_estado_impresion.setStyleSheet("color: red; font-weight: bold; font-size: 13px;")
 
-            elif len(codigo_venta) == 5:
+            elif len(codigo_venta) == 5: #Zipnova
                 estado = "Error"
                 try:
                     filas = driver.find_elements(By.CSS_SELECTOR, "tr.cursor-pointer")
@@ -644,7 +654,7 @@ class VerificacionTab(QWidget):
                     print("Z: Error durante impresión Zipnova:", e)
                     estado = "Error"
 
-            else:
+            else: # Enviame
                 filas = self._esperar_filas(driver, "table tbody tr, tr", timeout=10, min_text_len=2)
                 objetivos = []
 
@@ -837,6 +847,132 @@ class VerificacionTab(QWidget):
         )
         df_registro = pd.concat([df_registro, nuevo], ignore_index=True)
         df_registro.to_excel(registro_path, index=False)
+
+    def _imprimir_zipnova_por_cliente(self, nombre_cliente: str, codigo_mostrado: str) -> str:
+        """Busca y descarga etiqueta en Zipnova usando nombre y apellido."""
+        estado = "Error"
+        if not nombre_cliente:
+            QMessageBox.warning(self, "Sin cliente", "No hay nombre de cliente para buscar en Zipnova.")
+            self.lbl_estado_impresion.setText("Error")
+            self.lbl_estado_impresion.setStyleSheet("color: red; font-weight: bold; font-size: 13px;")
+            return estado
+
+        partes = nombre_cliente.strip().split()
+        if not partes:
+            QMessageBox.warning(self, "Sin cliente", "No hay nombre de cliente para buscar en Zipnova.")
+            self.lbl_estado_impresion.setText("Error")
+            self.lbl_estado_impresion.setStyleSheet("color: red; font-weight: bold; font-size: 13px;")
+            return estado
+
+        query = " ".join(partes[:2]).lower()
+
+        user_data_dir = r"C:\Users\bmonsalve\AppData\Local\Google\Chrome\Woo"
+        port = 9226
+        url_base = "https://app.zipnova.cl/shipments"
+        chrome_path = r"C:\Users\bmonsalve\AppData\Local\Google\Chrome\Application\chrome.exe"
+
+        def puerto_abierto(puerto):
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(1)
+                s.connect(("127.0.0.1", puerto))
+                s.close()
+                return True
+            except Exception:  # noqa: BLE001
+                return False
+
+        if not puerto_abierto(port):
+            subprocess.Popen(
+                [
+                    chrome_path,
+                    f"--remote-debugging-port={port}",
+                    f"--user-data-dir={user_data_dir}",
+                    url_base,
+                ]
+            )
+            time.sleep(5)
+
+        try:
+            chrome_options = Options()
+            chrome_options.add_experimental_option("debuggerAddress", f"127.0.0.1:{port}")
+            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+
+            base_handle = driver.current_window_handle
+            driver.execute_script("window.open('');")
+            driver.switch_to.window(driver.window_handles[-1])
+            driver.get(url_base)
+
+            filas = driver.find_elements(By.CSS_SELECTOR, "tr.cursor-pointer")
+            encontrados = []
+            for fila in filas:
+                texto = (fila.text or "").lower()
+                if query and query in texto:
+                    encontrados.append(fila)
+
+            if not encontrados:
+                QMessageBox.information(
+                    self,
+                    "No encontrado",
+                    f"No se encontraron envíos en Zipnova para el cliente '{query}'.",
+                )
+                estado = "Error"
+            else:
+                print(f"Z-Fallback: encontrados {len(encontrados)} envíos para cliente {query}")
+                for fila in encontrados:
+                    checkbox = fila.find_element(By.CSS_SELECTOR, "input.checks")
+                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", checkbox)
+                    time.sleep(0.3)
+                    driver.execute_script("arguments[0].click();", checkbox)
+                    time.sleep(0.3)
+
+                boton_imprimir = driver.find_element(By.ID, "mass_download")
+                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", boton_imprimir)
+                time.sleep(0.5)
+                driver.execute_script("arguments[0].click();", boton_imprimir)
+                print("Z-Fallback: Botón imprimir presionado")
+
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "div.modal-content"))
+                )
+                print("Z-Fallback: Modal detectado")
+
+                boton_zpl = driver.find_element(
+                    By.XPATH, "//div[contains(@class, 'option-card')][@data-format='zpl']"
+                )
+                driver.execute_script("arguments[0].click();", boton_zpl)
+                print("Z-Fallback: Opción ZPL seleccionada")
+
+                boton_descargar = driver.find_element(By.XPATH, "//button[contains(., 'Descargar')]")
+                driver.execute_script("arguments[0].click();", boton_descargar)
+                print("Z-Fallback: Botón descargar presionado")
+
+                estado = "Impreso"
+
+                carpeta_descargas = os.path.join(os.path.expanduser("~"), "Downloads")
+                timeout = time.time() + 20
+                while not any(
+                    f.endswith(".crdownload") or f.endswith(".zip") for f in os.listdir(carpeta_descargas)
+                ):
+                    if time.time() > timeout:
+                        print("Z-Fallback: Timeout esperando descarga ZPL")
+                        break
+                    time.sleep(1)
+
+            driver.close()
+            driver.switch_to.window(base_handle)
+
+        except Exception as exc:  # noqa: BLE001
+            print("Z-Fallback: Error durante impresión Zipnova:", exc)
+            estado = "Error"
+
+        self.lbl_estado_impresion.setText("Impreso" if estado == "Impreso" else "Error")
+        self.lbl_estado_impresion.setStyleSheet(
+            "color: green; font-weight: bold; font-size: 13px;"
+            if estado == "Impreso"
+            else "color: red; font-weight: bold; font-size: 13px;"
+        )
+        return estado
+
 
     def _esperar_filas(self, driver, css_selector="table tbody tr, tr", timeout=10, min_text_len=2):
         """Espera hasta timeout a que existan filas visibles con texto."""
