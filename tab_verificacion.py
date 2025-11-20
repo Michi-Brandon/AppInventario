@@ -24,11 +24,15 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from ml_api_client import NonPrintableError, descargar_etiqueta_mercadolibre
+from ml_api_client import NonPrintableError, descargar_etiqueta_mercadolibre, obtener_shipping_id
 from zipnova_api_client import (
     ZipnovaAPIError,
     descargar_etiqueta_zipnova_por_external_id,
     descargar_etiqueta_zipnova_por_nombre,
+)
+from enviame_api_client import (
+    descargar_etiquetas_enviame_por_shipping,
+    descargar_etiqueta_enviame_por_delivery,
 )
 from selenium import webdriver
 from selenium.webdriver import ActionChains
@@ -90,6 +94,7 @@ class VerificacionTab(QWidget):
         self.codigo_actual_mostrado = ""
         self.codigo_actual_busqueda = ""
         self.nombre_cliente_actual = ""
+        self._last_files_signature = None
 
         self._build_ui()
 
@@ -231,6 +236,11 @@ class VerificacionTab(QWidget):
                 QMessageBox.warning(self, "Sin archivos", f"No se encontraron archivos Excel en:\n{carpeta}")
             return
 
+        # Evita reprocesar si la lista de archivos no cambió (solo en modo automático).
+        firma_actual = sorted((os.path.basename(a), os.path.getmtime(a)) for a in archivos)
+        if not mostrar_mensaje and self._last_files_signature == firma_actual:
+            return
+
         dfs = []
         errores = []
 
@@ -283,6 +293,9 @@ class VerificacionTab(QWidget):
         else:
             print(f"[AUTO] {datetime.now():%H:%M:%S} → {total_archivos} archivos cargados ({total_filas} filas).")
 
+        # Actualiza la firma de archivos tras una carga exitosa.
+        self._last_files_signature = firma_actual
+
     def buscar_codigo_venta(self):
         codigo = self.input_codigo.text().strip()
         self.input_codigo.clear()
@@ -296,8 +309,6 @@ class VerificacionTab(QWidget):
             self.procesar_codigo_producto(codigo)
             return
 
-        if len(codigo) == 10:
-            codigo_busqueda = codigo[:9]
         elif len(codigo) not in [13, 16]:
             print(f"[Aviso] Código de venta con longitud no estándar: {len(codigo)} → {codigo}")
 
@@ -512,22 +523,31 @@ class VerificacionTab(QWidget):
             except Exception as exc:  # noqa: BLE001
                 msg = str(exc)
                 if "INVALID_SHIPMENT_MODE" in msg or "ME1" in msg:
-                    print("M: Shipment ME1, intentando vía Zipnova (API) por nombre de cliente...")
+                    print("M: Shipment ME1, intentando vía Zipnova (API) por shipping_id...")
                     try:
-                        etiqueta_path = descargar_etiqueta_zipnova_por_nombre(
-                            nombre_cliente=self.nombre_cliente_actual or "",
-                            fmt="zpl",
-                        )
-                        print(f"M: Etiqueta Zipnova API guardada en {etiqueta_path}")
+                        shipping_id = obtener_shipping_id(codigo_venta)
+                        etiqueta_path = descargar_etiqueta_zipnova_por_external_id(str(shipping_id), fmt="zpl")
+                        print(f"M: Etiqueta Zipnova API guardada en {etiqueta_path} (shipping_id={shipping_id})")
                         estado = "Impreso"
                         self.lbl_estado_impresion.setText("Impreso")
                         self.lbl_estado_impresion.setStyleSheet("color: green; font-weight: bold; font-size: 13px;")
                     except Exception as zexc:  # noqa: BLE001
-                        print("M: Error Zipnova API por nombre, usando fallback Selenium:", zexc)
-                        estado = self._imprimir_zipnova_por_cliente(
-                            nombre_cliente=self.nombre_cliente_actual,
-                            codigo_mostrado=codigo_mostrado,
-                        )
+                        print("M: Error Zipnova API por shipping_id, probando por nombre:", zexc)
+                        try:
+                            etiqueta_path = descargar_etiqueta_zipnova_por_nombre(
+                                nombre_cliente=self.nombre_cliente_actual or "",
+                                fmt="zpl",
+                            )
+                            print(f"M: Etiqueta Zipnova API guardada en {etiqueta_path}")
+                            estado = "Impreso"
+                            self.lbl_estado_impresion.setText("Impreso")
+                            self.lbl_estado_impresion.setStyleSheet("color: green; font-weight: bold; font-size: 13px;")
+                        except Exception as zexc2:  # noqa: BLE001
+                            print("M: Error Zipnova API por nombre, usando fallback Selenium:", zexc2)
+                            estado = self._imprimir_zipnova_por_cliente(
+                                nombre_cliente=self.nombre_cliente_actual,
+                                codigo_mostrado=codigo_mostrado,
+                            )
                 else:
                     print("M: Error al obtener etiqueta vía API:", exc)
                     estado = "Error"
@@ -540,6 +560,31 @@ class VerificacionTab(QWidget):
             if hasattr(self, "df_tabla"):
                 self.mostrar_tabla(self.df_tabla)
             return
+
+        # --- Enviame por API (Walmart multibulto, Paris, Ripley) ---
+        if plataforma in {"walmart", "paris", "ripley"}:
+            estado_api = None
+            try:
+                if plataforma == "walmart":
+                    rutas = descargar_etiquetas_enviame_por_shipping(codigo_venta, canal="walmart")
+                else:
+                    ruta = descargar_etiqueta_enviame_por_delivery(codigo_venta, canal=plataforma)
+                    rutas = [ruta]
+                print(f"Enviame API: etiquetas guardadas -> {rutas}")
+                estado_api = "Impreso"
+                self.lbl_estado_impresion.setText("Impreso")
+                self.lbl_estado_impresion.setStyleSheet("color: green; font-weight: bold; font-size: 13px;")
+            except Exception as exc:  # noqa: BLE001
+                print(f"Enviame API ({plataforma}) falló, se usará Selenium como fallback:", exc)
+
+            if estado_api == "Impreso":
+                estado = "Impreso"
+                self._registrar_impresion(codigo_mostrado, estado)
+                QTimer.singleShot(3000, lambda: self.lbl_estado_impresion.hide())
+                self.btn_imprimir.setEnabled(True)
+                if hasattr(self, "df_tabla"):
+                    self.mostrar_tabla(self.df_tabla)
+                return
 
         perfiles = {
             "mercadolibre": (

@@ -147,14 +147,32 @@ def find_order_any(order_identifier: str, access_token: str, seller_id: Optional
 
 
 def extract_shipping_id(order: Dict) -> int:
-    shipping = order.get("shipping") or {}
-    shipping_id = shipping.get("id")
-    if not shipping_id:
-        shipment = order.get("shipment") or {}
-        shipping_id = shipment.get("id")
+  shipping = order.get("shipping") or {}
+  shipping_id = shipping.get("id")
+  if not shipping_id:
+    shipment = order.get("shipment") or {}
+    shipping_id = shipment.get("id")
     if not shipping_id:
         raise RuntimeError("El order/pack no tiene shipping_id disponible.")
-    return shipping_id
+  return shipping_id
+
+
+def obtener_shipping_id(order_id: str, env_path: Optional[str] = None) -> int:
+  """
+  Devuelve el shipping_id de una orden o pack de Mercado Libre.
+  Reutiliza el refresh_token y find_order_any (orders/{id} o packs/{id}).
+  """
+  env = load_env(env_path)
+  ensure_keys(env, ["ML_CLIENT_ID", "ML_CLIENT_SECRET", "ML_REFRESH_TOKEN"])
+  seller_id = env.get("ML_SELLER_ID")
+
+  token_info = refresh_access_token(
+      env["ML_CLIENT_ID"], env["ML_CLIENT_SECRET"], env["ML_REFRESH_TOKEN"]
+  )
+  access_token = token_info["access_token"]
+
+  order = find_order_any(order_id, access_token, seller_id=seller_id)
+  return extract_shipping_id(order)
 
 
 def download_label(shipment_id: int, access_token: str, response_type: str = "zpl2") -> bytes:
@@ -216,7 +234,7 @@ def descargar_etiqueta_mercadolibre(
 
 
 __all__ = [
-    "descargar_etiqueta_mercadolibre",
-    "NonPrintableError",
+  "descargar_etiqueta_mercadolibre",
+  "NonPrintableError",
+  "obtener_shipping_id",
 ]
-
