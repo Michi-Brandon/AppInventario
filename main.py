@@ -7,10 +7,10 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QMessageBox, QMenu, QMenu
 
 from tab_bodegas import BodegasTab
 from tab_entradas import EntradasTab
-from tab_logueo import LogueoTab
 from tab_movimientos import MovimientosTab
 from tab_stock import StockTab
 from tab_verificacion import VerificacionTab
+from tab_multivende import MultivendeTab
 
 
 class VentanaPrincipal(QMainWindow):
@@ -52,11 +52,13 @@ class VentanaPrincipal(QMainWindow):
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
 
+        self.multivende_tab = MultivendeTab(self)
         self.movimientos_tab = MovimientosTab(self.config, self)
         self.verificacion_tab = VerificacionTab(
             self.config,
             self,
             on_salida_generada=self.movimientos_tab.cargar_movimientos,
+            on_carga_multivende=self.multivende_tab.set_data,
         )
         self.entradas_tab = EntradasTab(
             self.config,
@@ -65,17 +67,16 @@ class VentanaPrincipal(QMainWindow):
         )
         self.bodegas_tab = BodegasTab(self)
         self.stock_tab = StockTab(self.config, self)
-        self.logueo_tab = LogueoTab(self)
 
         self.tabs.addTab(self.verificacion_tab, "Verificación de pedidos")
+        self.tabs.addTab(self.multivende_tab, "Datos Multivende")
         self.tabs.addTab(self.movimientos_tab, "Movimientos del día")
         self.tabs.addTab(self.entradas_tab, "Entradas de productos")
         self.tabs.addTab(self.bodegas_tab, "Movimientos entre bodegas")
         self.tabs.addTab(self.stock_tab, "Stock de productos")
-        self.tabs.addTab(self.logueo_tab, "Logueo a páginas")
 
         self.menu_accion_cargar.triggered.connect(self.verificacion_tab.cargar_excel)
-        self.verificacion_tab.cargar_excel(mostrar_mensaje=True)
+        self.verificacion_tab.cargar_excel(mostrar_mensaje=False)
         self._enfocar_codigo_si_principal(self.tabs.currentIndex())
 
     def _configurar_actualizacion(self):

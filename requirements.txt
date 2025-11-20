@@ -2,6 +2,4 @@ pandas
 openpyxl
 PyQt6
 watchdog
-selenium
-webdriver-manager
 requests

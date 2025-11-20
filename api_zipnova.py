@@ -21,7 +21,7 @@ from typing import Any, Dict, Iterable, Tuple
 
 import requests
 
-from ml_api_client import ensure_keys, load_env
+from api_mercadolibre import ensure_keys, load_env
 
 
 class ZipnovaAPIError(RuntimeError):
