@@ -34,6 +34,7 @@ from enviame_api_client import (
     descargar_etiquetas_enviame_por_shipping,
     descargar_etiqueta_enviame_por_delivery,
 )
+from paris_cencosud_client import descargar_etiqueta_paris_cencosud
 from selenium import webdriver
 from selenium.webdriver import ActionChains
 from selenium.webdriver.chrome.options import Options
@@ -526,7 +527,11 @@ class VerificacionTab(QWidget):
                     print("M: Shipment ME1, intentando vía Zipnova (API) por shipping_id...")
                     try:
                         shipping_id = obtener_shipping_id(codigo_venta)
-                        etiqueta_path = descargar_etiqueta_zipnova_por_external_id(str(shipping_id), fmt="zpl")
+                        etiqueta_path = descargar_etiqueta_zipnova_por_external_id(
+                            str(shipping_id),
+                            fmt="zpl",
+                            file_name=codigo_venta,
+                        )
                         print(f"M: Etiqueta Zipnova API guardada en {etiqueta_path} (shipping_id={shipping_id})")
                         estado = "Impreso"
                         self.lbl_estado_impresion.setText("Impreso")
@@ -561,21 +566,24 @@ class VerificacionTab(QWidget):
                 self.mostrar_tabla(self.df_tabla)
             return
 
-        # --- Enviame por API (Walmart multibulto, Paris, Ripley) ---
+        # --- API directa (Walmart via Enviame multibulto; Paris via Cencosud; Ripley via Enviame) ---
         if plataforma in {"walmart", "paris", "ripley"}:
             estado_api = None
             try:
                 if plataforma == "walmart":
                     rutas = descargar_etiquetas_enviame_por_shipping(codigo_venta, canal="walmart")
+                elif plataforma == "paris":
+                    ruta = descargar_etiqueta_paris_cencosud(codigo_venta)
+                    rutas = [ruta]
                 else:
                     ruta = descargar_etiqueta_enviame_por_delivery(codigo_venta, canal=plataforma)
                     rutas = [ruta]
-                print(f"Enviame API: etiquetas guardadas -> {rutas}")
+                print(f"API etiquetas guardadas -> {rutas}")
                 estado_api = "Impreso"
                 self.lbl_estado_impresion.setText("Impreso")
                 self.lbl_estado_impresion.setStyleSheet("color: green; font-weight: bold; font-size: 13px;")
             except Exception as exc:  # noqa: BLE001
-                print(f"Enviame API ({plataforma}) falló, se usará Selenium como fallback:", exc)
+                print(f"API ({plataforma}) fallo, se usara Selenium como fallback:", exc)
 
             if estado_api == "Impreso":
                 estado = "Impreso"

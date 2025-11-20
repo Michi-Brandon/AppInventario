@@ -46,13 +46,14 @@ def _build_session(env: Dict[str, str]) -> requests.Session:
     return session
 
 
-def _guardar_en_descargas(nombre: str, contenido: bytes, fmt: str) -> str:
-    downloads = os.path.join(os.path.expanduser("~"), "Downloads")
-    os.makedirs(downloads, exist_ok=True)
-    nombre_archivo = f"label_{nombre}.{fmt}"
-    ruta = os.path.join(downloads, nombre_archivo)
-    with open(ruta, "wb") as fh:
-        fh.write(contenido)
+def _guardar_en_descargas(nombre: str, contenido: bytes, fmt: str, file_name: str | None = None) -> str:
+  downloads = os.path.join(os.path.expanduser("~"), "Downloads")
+  os.makedirs(downloads, exist_ok=True)
+  etiqueta = file_name or nombre
+  nombre_archivo = f"label_{etiqueta}.{fmt}"
+  ruta = os.path.join(downloads, nombre_archivo)
+  with open(ruta, "wb") as fh:
+    fh.write(contenido)
     return ruta
 
 
@@ -149,21 +150,21 @@ def buscar_envio_por_nombre(
 
 
 def descargar_etiqueta_zipnova_por_external_id(
-    external_id: str, fmt: str = "zpl", env_path: str | None = None
+    external_id: str, fmt: str = "zpl", env_path: str | None = None, file_name: str | None = None
 ) -> str:
-    envio = buscar_envio_por_external_id(external_id, env_path=env_path)
-    session: requests.Session = envio.pop("_session")
-    base_url: str = envio.pop("_base_url")
-    label = _descargar_label(session, base_url, int(envio["id"]), fmt=fmt)
-    return _guardar_en_descargas(external_id, label, fmt)
+  envio = buscar_envio_por_external_id(external_id, env_path=env_path)
+  session: requests.Session = envio.pop("_session")
+  base_url: str = envio.pop("_base_url")
+  label = _descargar_label(session, base_url, int(envio["id"]), fmt=fmt)
+  return _guardar_en_descargas(external_id, label, fmt, file_name=file_name)
 
 
 def descargar_etiqueta_zipnova_por_nombre(
-    nombre_cliente: str, fmt: str = "zpl", env_path: str | None = None
+    nombre_cliente: str, fmt: str = "zpl", env_path: str | None = None, file_name: str | None = None
 ) -> str:
-    envio = buscar_envio_por_nombre(nombre_cliente, env_path=env_path)
-    session: requests.Session = envio.pop("_session")
-    base_url: str = envio.pop("_base_url")
-    external_id = envio.get("external_id") or str(envio.get("id"))
-    label = _descargar_label(session, base_url, int(envio["id"]), fmt=fmt)
-    return _guardar_en_descargas(external_id, label, fmt)
+  envio = buscar_envio_por_nombre(nombre_cliente, env_path=env_path)
+  session: requests.Session = envio.pop("_session")
+  base_url: str = envio.pop("_base_url")
+  external_id = envio.get("external_id") or str(envio.get("id"))
+  label = _descargar_label(session, base_url, int(envio["id"]), fmt=fmt)
+  return _guardar_en_descargas(external_id, label, fmt, file_name=file_name)
