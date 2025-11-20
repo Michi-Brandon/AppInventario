@@ -25,6 +25,11 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from ml_api_client import NonPrintableError, descargar_etiqueta_mercadolibre
+from zipnova_api_client import (
+    ZipnovaAPIError,
+    descargar_etiqueta_zipnova_por_external_id,
+    descargar_etiqueta_zipnova_por_nombre,
+)
 from selenium import webdriver
 from selenium.webdriver import ActionChains
 from selenium.webdriver.chrome.options import Options
@@ -459,6 +464,33 @@ class VerificacionTab(QWidget):
             QMessageBox.warning(self, "Canal desconocido", f"No se reconoce el canal: {canal}")
             return
 
+        # --- WooCommerce vía API Zipnova (sin Selenium) ---
+        if plataforma == "woocommerce":
+            estado = "Error"
+            external_id = codigo_mostrado or codigo_venta
+            if external_id and not str(external_id).upper().startswith("W"):
+                external_id = f"W{external_id}"
+            try:
+                etiqueta_path = descargar_etiqueta_zipnova_por_external_id(
+                    external_id, fmt="zpl"
+                )
+                print(f"Woo/Zipnova: Etiqueta API guardada en {etiqueta_path}")
+                estado = "Impreso"
+                self.lbl_estado_impresion.setText("Impreso")
+                self.lbl_estado_impresion.setStyleSheet("color: green; font-weight: bold; font-size: 13px;")
+            except Exception as exc:  # noqa: BLE001
+                print("Woo/Zipnova: Error al obtener etiqueta vía API:", exc)
+                estado = "Error"
+                self.lbl_estado_impresion.setText("Error")
+                self.lbl_estado_impresion.setStyleSheet("color: red; font-weight: bold; font-size: 13px;")
+
+            self._registrar_impresion(codigo_mostrado or codigo_venta, estado)
+            QTimer.singleShot(3000, lambda: self.lbl_estado_impresion.hide())
+            self.btn_imprimir.setEnabled(True)
+            if hasattr(self, "df_tabla"):
+                self.mostrar_tabla(self.df_tabla)
+            return
+
         # --- MercadoLibre vía API (sin Selenium) ---
         if plataforma == "mercadolibre":
             estado = "Error"
@@ -480,11 +512,22 @@ class VerificacionTab(QWidget):
             except Exception as exc:  # noqa: BLE001
                 msg = str(exc)
                 if "INVALID_SHIPMENT_MODE" in msg or "ME1" in msg:
-                    print("M: Shipment ME1, intentando vía Zipnova por nombre de cliente...")
-                    estado = self._imprimir_zipnova_por_cliente(
-                        nombre_cliente=self.nombre_cliente_actual,
-                        codigo_mostrado=codigo_mostrado,
-                    )
+                    print("M: Shipment ME1, intentando vía Zipnova (API) por nombre de cliente...")
+                    try:
+                        etiqueta_path = descargar_etiqueta_zipnova_por_nombre(
+                            nombre_cliente=self.nombre_cliente_actual or "",
+                            fmt="zpl",
+                        )
+                        print(f"M: Etiqueta Zipnova API guardada en {etiqueta_path}")
+                        estado = "Impreso"
+                        self.lbl_estado_impresion.setText("Impreso")
+                        self.lbl_estado_impresion.setStyleSheet("color: green; font-weight: bold; font-size: 13px;")
+                    except Exception as zexc:  # noqa: BLE001
+                        print("M: Error Zipnova API por nombre, usando fallback Selenium:", zexc)
+                        estado = self._imprimir_zipnova_por_cliente(
+                            nombre_cliente=self.nombre_cliente_actual,
+                            codigo_mostrado=codigo_mostrado,
+                        )
                 else:
                     print("M: Error al obtener etiqueta vía API:", exc)
                     estado = "Error"
