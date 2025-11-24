@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Optional, Sequence
 
 import pandas as pd
 from openpyxl import load_workbook
@@ -31,10 +31,18 @@ def guardar_movimientos_excel(df_mov: pd.DataFrame, ruta: str):
     _forzar_formato_texto(ruta, df_salida.columns)
 
 
-def _forzar_formato_texto(ruta: str, columnas: Sequence[str]):
+def forzar_columnas_texto_excel(ruta: str, columnas_presentes: Sequence[str], columnas_objetivo: Sequence[str]):
+    """Expone el formateo de columnas a texto para otros Excel fuera de movimientos."""
+    _forzar_formato_texto(ruta, columnas_presentes, columnas_objetivo)
+
+
+def _forzar_formato_texto(
+    ruta: str, columnas: Sequence[str], columnas_objetivo: Optional[Sequence[str]] = None
+):
+    objetivos = columnas_objetivo if columnas_objetivo is not None else COLUMNAS_TEXTO_FORZADO
     libro = load_workbook(ruta)
     hoja = libro.active
-    for columna in COLUMNAS_TEXTO_FORZADO:
+    for columna in objetivos:
         if columna not in columnas:
             continue
         idx = columnas.index(columna) + 1 if isinstance(columnas, list) else columnas.get_loc(columna) + 1

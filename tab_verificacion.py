@@ -32,7 +32,7 @@ from api_enviame import (
 )
 from api_paris_cencosud import descargar_etiqueta_paris_cencosud
 
-from movimientos_utils import guardar_movimientos_excel
+from movimientos_utils import forzar_columnas_texto_excel, guardar_movimientos_excel
 from operadores import OPERADORES
 
 
@@ -319,7 +319,9 @@ class VerificacionTab(QWidget):
 
         cliente = str(filas.iloc[0, 9])
         canal = str(filas.iloc[0, 5])
+        self.total_productos_actual = 0
         total_cantidad = int(pd.to_numeric(filas.iloc[:, 14], errors="coerce").fillna(0).sum())
+        self.total_productos_actual = total_cantidad
 
         self.lbl_cliente.setText(f"Cliente: {cliente}")
         self.lbl_canal.setText(f"Canal: {canal}")
@@ -388,16 +390,26 @@ class VerificacionTab(QWidget):
         os.makedirs(etiquetas_path, exist_ok=True)
         registro_path = os.path.join(etiquetas_path, "registro_impresiones.xlsx")
         if os.path.exists(registro_path):
-            df_imp = pd.read_excel(registro_path)
+            df_imp = pd.read_excel(registro_path, dtype=str)
         else:
-            df_imp = pd.DataFrame(columns=["CódigoVenta", "Fecha", "Estado"])
+            df_imp = pd.DataFrame(columns=["CódigoVenta", "Operador", "Fecha", "Estado"])
+
+        for col in ["CódigoVenta", "Operador", "Fecha", "Estado"]:
+            if col not in df_imp.columns:
+                df_imp[col] = ""
+        df_imp["CódigoVenta"] = df_imp["CódigoVenta"].fillna("").astype(str)
 
         codigo_actual = self.codigo_actual_mostrado or self.lbl_codigo.text().replace("Código venta:", "").strip()
         codigo_busqueda = self.codigo_actual_busqueda or codigo_actual
         estado = "No impreso"
+        df_imp_codigos = df_imp["CódigoVenta"].astype(str).str.strip().apply(self._normalizar_codigo)
         for codigo_ref in [codigo_actual, codigo_busqueda]:
-            if codigo_ref and codigo_ref in df_imp["CódigoVenta"].astype(str).values:
-                estado = df_imp.loc[df_imp["CódigoVenta"].astype(str) == codigo_ref, "Estado"].iloc[-1]
+            if not codigo_ref:
+                continue
+            objetivo = self._normalizar_codigo(codigo_ref)
+            mask = df_imp_codigos == objetivo
+            if mask.any():
+                estado = df_imp.loc[mask, "Estado"].iloc[-1]
                 break
 
         self._set_estado_impresion(estado)
@@ -476,10 +488,11 @@ class VerificacionTab(QWidget):
             except NonPrintableError as exc:
                 QMessageBox.information(
                     self,
-                    "Etiqueta ya emitida",
-                    f"Mercado Libre indica que ya se emitió la etiqueta (NON_PRINTABLE).\n{exc}",
+                    "Etiqueta se emitirá en la tarde o mañana",
+                    f"Mercado Libre indica que este envio es para entregar a la colecta mañana.\n{exc}",
                 )
                 estado = "Error"
+                print(f"M: Etiqueta API no emitida (colecta mañana) para {codigo_venta}")
             except Exception as exc:  # noqa: BLE001
                 msg = str(exc)
                 if "INVALID_SHIPMENT_MODE" in msg or "ME1" in msg:
@@ -511,7 +524,8 @@ class VerificacionTab(QWidget):
         elif plataforma in {"walmart", "paris", "ripley"}:
             try:
                 if plataforma == "walmart":
-                    rutas = descargar_etiquetas_enviame_por_shipping(codigo_venta, canal="walmart")
+                    stop_una_pagina = (self.total_productos_actual == 1)
+                    rutas = descargar_etiquetas_enviame_por_shipping(codigo_venta, canal="walmart", stop_after_first_match=stop_una_pagina)
                     print(f"Walmart/Enviame: etiquetas guardadas {rutas}")
                 elif plataforma == "paris":
                     ruta = descargar_etiqueta_paris_cencosud(codigo_venta)
@@ -521,7 +535,16 @@ class VerificacionTab(QWidget):
                     print(f"{plataforma.capitalize()}/Enviame: etiqueta guardada {ruta}")
                 estado = "Impreso"
             except Exception as exc:  # noqa: BLE001
-                print(f"API ({plataforma}) falló:", exc)
+                msg_lower = str(exc).lower()
+                if plataforma == "walmart" and "rechazado" in msg_lower:
+                    print(f"API ({plataforma}) falló: envío {codigo_venta} rechazado por courier.")
+                    QMessageBox.information(
+                        self,
+                        "Etiqueta Walmart NO creada",
+                        "Etiqueta Walmart NO creada, informar a Wendy el numero de envio",
+                    )
+                else:
+                    print(f"API ({plataforma}) falló:", exc)
                 estado = "Error"
 
         # Estado en UI
@@ -615,17 +638,39 @@ class VerificacionTab(QWidget):
         registro_path = os.path.join(etiquetas_path, "registro_impresiones.xlsx")
 
         df_registro = (
-            pd.read_excel(registro_path)
+            pd.read_excel(registro_path, dtype=str)
             if os.path.exists(registro_path)
-            else pd.DataFrame(columns=["CódigoVenta", "Fecha", "Estado"])
+            else pd.DataFrame(columns=["CódigoVenta", "Operador", "Fecha", "Estado"])
         )
+        for col in ["CódigoVenta", "Operador", "Fecha", "Estado"]:
+            if col not in df_registro.columns:
+                df_registro[col] = ""
+
+        df_registro["CódigoVenta"] = df_registro["CódigoVenta"].fillna("").astype(str)
+        df_registro["Operador"] = df_registro["Operador"].fillna("").astype(str)
+        df_registro["Fecha"] = df_registro["Fecha"].fillna("").astype(str)
+        df_registro["Estado"] = df_registro["Estado"].fillna("").astype(str)
+
+        codigo_excel = str(codigo_venta)
+        operador = self.operador_combo.currentText() if hasattr(self, "operador_combo") else ""
 
         nuevo = pd.DataFrame(
-            [[codigo_venta, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), estado]],
-            columns=["CódigoVenta", "Fecha", "Estado"],
+            [[codigo_excel, operador, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), estado]],
+            columns=["CódigoVenta", "Operador", "Fecha", "Estado"],
         )
         df_registro = pd.concat([df_registro, nuevo], ignore_index=True)
         df_registro.to_excel(registro_path, index=False)
+        forzar_columnas_texto_excel(registro_path, df_registro.columns, ["CódigoVenta"])
+
+    def _normalizar_codigo(self, codigo: str) -> str:
+        if codigo is None:
+            return ""
+        texto = str(codigo).strip()
+        if texto.startswith("'"):
+            texto = texto.lstrip("'")
+        if texto.startswith('="') and texto.endswith('"'):
+            texto = texto[2:-1]
+        return texto
 
     def _set_estado_impresion(self, estado: str):
         texto = estado if estado else "No impreso"

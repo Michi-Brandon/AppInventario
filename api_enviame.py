@@ -168,7 +168,8 @@ def _collect_matches_shipment(
   api_base: str,
   seller_id: str,
   max_pages: int = 50,
-  limit: int = 200,
+  limit: int = 100,
+  stop_after_first_match: bool = False,
 ) -> List[Dict[str, Any]]:
   matches: List[Dict[str, Any]] = []
   found_page: Optional[int] = None
@@ -189,8 +190,11 @@ def _collect_matches_shipment(
         if found_page is None:
           found_page = page
 
-    if found_page is not None and page >= found_page + 1:
-      break
+    if found_page is not None:
+      if stop_after_first_match:
+        break
+      if page >= found_page+1:
+        break
 
     if len(items) < limit:
       break
@@ -202,6 +206,7 @@ def descargar_etiquetas_enviame_por_shipping(
   shipping_number: str,
   canal: str,
   env_path: Optional[str] = None,
+  stop_after_first_match: bool = False,
 ) -> List[str]:
   """
   Lista los deliveries del seller y descarga todas las etiquetas ZPL
@@ -215,7 +220,7 @@ def descargar_etiquetas_enviame_por_shipping(
   seller_id = _seller_id(env)
   out_dir = _output_dir(env)
 
-  deliveries = _collect_matches_shipment(shipping_number, api_key, api_base, seller_id)
+  deliveries = _collect_matches_shipment(shipping_number, api_key, api_base, seller_id, stop_after_first_match=stop_after_first_match)
   if not deliveries:
     raise RuntimeError(
       f"No se encontraron fletes para el numero de envio {shipping_number}. "
