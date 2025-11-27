@@ -2,6 +2,10 @@
 /dist/
 /build/
 
+# Variables de entorno
+.env
+*.env
+
 # Ignorar ejecutables
 *.exe
 *.pkg
