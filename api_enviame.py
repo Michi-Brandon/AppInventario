@@ -69,6 +69,39 @@ def http_get(url: str, headers: Optional[Dict[str, str]] = None) -> str:
   except URLError as err:
     raise RuntimeError(f"No se pudo conectar a {url}: {err}") from err
 
+def http_post_json(url: str, payload: Dict[str, Any], headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+  base_headers = {"Content-Type": "application/json"}
+  if headers:
+    base_headers.update(headers)
+  data = json.dumps(payload).encode("utf-8")
+  req = Request(url, data=data, headers=base_headers, method="POST")
+  try:
+    with urlopen(req, timeout=60) as resp:
+      body = resp.read().decode("utf-8")
+      return json.loads(body) if body else {}
+  except HTTPError as err:
+    details = err.read().decode("utf-8", errors="ignore")
+    raise RuntimeError(f"Error {err.code} al llamar {url} -> {details}") from err
+  except URLError as err:
+    raise RuntimeError(f"No se pudo conectar a {url}: {err}") from err
+
+
+def _solicitar_labels(
+  api_key: str,
+  api_base: str,
+  seller_id: str,
+  delivery_ids: List[str],
+  tipo: str = "pdf",
+  labels_per_page: int = 1,
+) -> Dict[str, Any]:
+  ids = [str(d).strip() for d in delivery_ids if str(d).strip()]
+  if not ids:
+    raise RuntimeError("No hay deliveries para solicitar etiquetas.")
+
+  payload = {"deliveries": ids, "type": tipo, "labelsPerPage": labels_per_page}
+  url = f"{api_base}/s2/v2/companies/{quote(str(seller_id), safe='')}/labels"
+  return http_post_json(url, payload, headers={"api-key": api_key, "Accept": "application/json"})
+
 
 def _classify_zpl(zpl_value: Any) -> Dict[str, str] | None:
   if not zpl_value:
@@ -202,6 +235,58 @@ def _collect_matches_shipment(
   return matches
 
 
+def marcar_impreso_enviame_por_shipping(
+  shipping_number: str,
+  canal: str,
+  env_path: Optional[str] = None,
+  stop_after_first_match: bool = False,
+  tipo: str = "pdf",
+  labels_per_page: int = 1,
+) -> Dict[str, Any]:
+  """
+  Lista los deliveries asociados al numero de envio y llama al endpoint /labels
+  para marcarlos como impresos (genera PDF resumen/labels).
+  """
+  env = load_env(env_path)
+  api_key = _api_key_for_channel(env, canal)
+  api_base = _api_base(env)
+  seller_id = _seller_id(env)
+
+  deliveries = _collect_matches_shipment(
+    shipping_number,
+    api_key,
+    api_base,
+    seller_id,
+    stop_after_first_match=stop_after_first_match,
+  )
+  if not deliveries:
+    raise RuntimeError(
+      f"No se encontraron deliveries para el numero de envio {shipping_number} al marcar impresion."
+    )
+
+  delivery_ids: List[str] = []
+  for d in deliveries:
+    if not isinstance(d, dict):
+      continue
+    for key in ("delivery_id", "id", "identifier"):
+      val = d.get(key)
+      if val and str(val).strip() not in delivery_ids:
+        delivery_ids.append(str(val).strip())
+        break
+
+  if not delivery_ids:
+    raise RuntimeError("No se encontraron IDs de delivery para solicitar labels.")
+
+  return _solicitar_labels(
+    api_key,
+    api_base,
+    seller_id,
+    delivery_ids,
+    tipo=tipo,
+    labels_per_page=labels_per_page,
+  )
+
+
 def descargar_etiquetas_enviame_por_shipping(
   shipping_number: str,
   canal: str,
@@ -262,5 +347,5 @@ def descargar_etiquetas_enviame_por_shipping(
 __all__ = [
   "descargar_etiquetas_enviame_por_shipping",
   "descargar_etiqueta_enviame_por_delivery",
+  "marcar_impreso_enviame_por_shipping",
 ]
-

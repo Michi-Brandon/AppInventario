@@ -29,6 +29,7 @@ from api_zipnova import (
 from api_enviame import (
     descargar_etiquetas_enviame_por_shipping,
     descargar_etiqueta_enviame_por_delivery,
+    marcar_impreso_enviame_por_shipping,
 )
 from api_paris_cencosud import descargar_etiqueta_paris_cencosud
 
@@ -526,7 +527,26 @@ class VerificacionTab(QWidget):
                 if plataforma == "walmart":
                     stop_una_pagina = (self.total_productos_actual == 1)
                     rutas = descargar_etiquetas_enviame_por_shipping(codigo_venta, canal="walmart", stop_after_first_match=stop_una_pagina)
-                    print(f"Walmart/Enviame: etiquetas guardadas {rutas}")
+                    # Muestra solo nota de venta + folios (sin ruta completa)
+                    folios = []
+                    for ruta in rutas:
+                        nombre = os.path.splitext(os.path.basename(ruta))[0]
+                        partes = nombre.split("-")
+                        if len(partes) >= 2:
+                            folios.append("-".join(partes[1:]))
+                    folios_str = "-".join([f for f in folios if f])
+                    etiqueta_msg = f"{codigo_venta}-{folios_str}" if folios_str else str(codigo_venta)
+                    print(f"Walmart/Enviame: etiquetas guardadas: {etiqueta_msg}")
+                    try:
+                        resp_labels = marcar_impreso_enviame_por_shipping(
+                            codigo_venta,
+                            canal="walmart",
+                            stop_after_first_match=stop_una_pagina,
+                        )
+                        print(f"Walmart/Enviame: deliveries marcados como impreso: {codigo_venta}")
+                    except Exception as mark_exc:  # noqa: BLE001
+                        print(f"Walmart/Enviame: no se pudo marcar como impreso -> {mark_exc}")
+                    
                 elif plataforma == "paris":
                     ruta = descargar_etiqueta_paris_cencosud(codigo_venta)
                     print(f"Paris/Cencosud: etiqueta guardada {ruta}")
