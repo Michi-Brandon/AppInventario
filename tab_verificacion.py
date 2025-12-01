@@ -533,8 +533,9 @@ class VerificacionTab(QWidget):
                         nombre = os.path.splitext(os.path.basename(ruta))[0]
                         partes = nombre.split("-")
                         if len(partes) >= 2:
-                            folios.append("-".join(partes[1:]))
-                    folios_str = "-".join([f for f in folios if f])
+                            folios.append(partes[1])
+                    folios_unicos = sorted(set(folios))
+                    folios_str = "-".join([f for f in folios_unicos if f])
                     etiqueta_msg = f"{codigo_venta}-{folios_str}" if folios_str else str(codigo_venta)
                     print(f"Walmart/Enviame: etiquetas guardadas: {etiqueta_msg}")
                     try:
@@ -546,6 +547,13 @@ class VerificacionTab(QWidget):
                         print(f"Walmart/Enviame: deliveries marcados como impreso: {codigo_venta}")
                     except Exception as mark_exc:  # noqa: BLE001
                         print(f"Walmart/Enviame: no se pudo marcar como impreso -> {mark_exc}")
+                    estado = "Impreso"
+                    total_folios = len(folios_unicos)
+                    if total_folios != self.total_productos_actual:
+                        estado = "Impreso Faltan"
+                        print(
+                            f"Walmart/Enviame: folios obtenidos ({total_folios}) no coinciden con productos ({self.total_productos_actual})"
+                        )
                     
                 elif plataforma == "paris":
                     ruta = descargar_etiqueta_paris_cencosud(codigo_venta)

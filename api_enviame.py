@@ -205,6 +205,21 @@ def _collect_matches_shipment(
   stop_after_first_match: bool = False,
 ) -> List[Dict[str, Any]]:
   matches: List[Dict[str, Any]] = []
+
+  def _try_filtered(param: str) -> List[Dict[str, Any]]:
+    url = f"{api_base}/s2/v2/companies/{quote(seller_id)}/deliveries?{param}={quote(str(shipping_number))}&limit={limit}"
+    body = http_get(url, headers={"api-key": api_key, "Accept": "application/json"})
+    data = json.loads(body)
+    items = data.get("data", [])
+    return items if isinstance(items, list) else []
+
+  # Primero intenta filtrar directamente por imported_id o tracking_number (mucho más rápido).
+  for param in ("imported_id", "tracking_number"):
+    filtered = _try_filtered(param)
+    if filtered:
+      return filtered
+
+  # Fallback: paginar todo el listado.
   found_page: Optional[int] = None
 
   for page in range(1, max_pages + 1):
