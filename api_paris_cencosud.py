@@ -213,6 +213,25 @@ def _download_label(label_info: Dict[str, Any], token: str, env: Dict[str, str])
   return out_path
 
 
+def _print_label(label_id: Optional[str], token: str, env: Dict[str, str], allow_retry: bool = True) -> None:
+  if not label_id:
+    raise RuntimeError("No se recibio labelId para marcar la etiqueta como impresa.")
+
+  base_url = (env.get("ORDERS_BASE_URL") or DEFAULT_ORDERS_BASE_URL).rstrip("/")
+  url = f"{base_url}/sub-orders/{label_id}/print-label"
+  headers = {"Authorization": f"Bearer {token}"} if token else {}
+
+  response = requests.get(url, headers=headers, timeout=60)
+
+  if response.status_code in (401, 403) and allow_retry:
+    refreshed = _request_new_token(env)
+    _print_label(label_id, refreshed, env, allow_retry=False)
+    return
+
+  if not response.ok:
+    raise RuntimeError(f"Marcar etiqueta como impresa fallo ({response.status_code}): {response.text}")
+
+
 def _order_number_for_api(order_number: str) -> str:
   # Los pedidos de Paris vienen como subOrden (terminan en un dígito extra).
   # La API de /orders/{id} espera el número base sin el último carácter.
@@ -230,6 +249,7 @@ def descargar_etiqueta_paris_cencosud(order_number: str, env_path: Optional[str]
   order = _fetch_order(order_number_api, token, env)
   label_info = _pick_label(order)
   out_path = _download_label(label_info, token, env)
+  _print_label(label_info.get("labelId"), token, env)
   return str(out_path)
 
 
