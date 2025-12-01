@@ -558,10 +558,11 @@ class VerificacionTab(QWidget):
                 elif plataforma == "paris":
                     ruta = descargar_etiqueta_paris_cencosud(codigo_venta)
                     print(f"Paris/Cencosud: etiqueta guardada {ruta}")
+                    estado = "Impreso"
                 else:
                     ruta = descargar_etiqueta_enviame_por_delivery(codigo_venta, canal=plataforma)
                     print(f"{plataforma.capitalize()}/Enviame: etiqueta guardada {ruta}")
-                estado = "Impreso"
+                    estado = "Impreso"
             except Exception as exc:  # noqa: BLE001
                 msg_lower = str(exc).lower()
                 if plataforma == "walmart" and "rechazado" in msg_lower:
@@ -570,6 +571,13 @@ class VerificacionTab(QWidget):
                         self,
                         "Etiqueta Walmart NO creada",
                         "Etiqueta Walmart NO creada, informar a Wendy el numero de envio",
+                    )
+                elif plataforma == "walmart" and "no se pudo obtener etiqueta" in msg_lower:
+                    print(f"API ({plataforma}) falló: etiquetas no creadas en Walmart/Enviame para {codigo_venta}")
+                    QMessageBox.information(
+                        self,
+                        "Etiquetas no creadas en Walmart",
+                        "Etiquetas no creadas en Walmart (Enviame aún no las genera). Intente nuevamente más tarde.",
                     )
                 else:
                     print(f"API ({plataforma}) falló:", exc)
