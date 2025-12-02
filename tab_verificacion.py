@@ -492,7 +492,7 @@ class VerificacionTab(QWidget):
                     "Etiqueta se emitirá en la tarde o mañana",
                     f"Mercado Libre indica que este envio es para entregar a la colecta mañana.\n{exc}",
                 )
-                estado = "Error"
+                estado = "Error Colecta Mañana"
                 print(f"M: Etiqueta API no emitida (colecta mañana) para {codigo_venta}")
             except Exception as exc:  # noqa: BLE001
                 msg = str(exc)
@@ -547,12 +547,21 @@ class VerificacionTab(QWidget):
                         print(f"Walmart/Enviame: deliveries marcados como impreso: {codigo_venta}")
                     except Exception as mark_exc:  # noqa: BLE001
                         print(f"Walmart/Enviame: no se pudo marcar como impreso -> {mark_exc}")
-                    estado = "Impreso"
                     total_folios = len(folios_unicos)
-                    if total_folios != self.total_productos_actual:
-                        estado = "Impreso Faltan"
+                    estado = "Impreso"
+                    if total_folios == 0:
+                        estado = "Error Sin Etiquetas"
+                        print(f"Walmart/Enviame: sin etiquetas generadas para {codigo_venta}")
+                    elif total_folios < self.total_productos_actual:
+                        estado = "Error Faltan Etiquetas"
                         print(
                             f"Walmart/Enviame: folios obtenidos ({total_folios}) no coinciden con productos ({self.total_productos_actual})"
+                        )
+                    if estado.startswith("Error"):
+                        QMessageBox.information(
+                            self,
+                            "Etiquetas incompletas en Walmart",
+                            "Walmart aún no crea todas las etiquetas, avisar a Wendy",
                         )
                     
                 elif plataforma == "paris":
@@ -566,23 +575,24 @@ class VerificacionTab(QWidget):
             except Exception as exc:  # noqa: BLE001
                 msg_lower = str(exc).lower()
                 if plataforma == "walmart" and "rechazado" in msg_lower:
-                    print(f"API ({plataforma}) falló: envío {codigo_venta} rechazado por courier.")
+                    print(f"API ({plataforma}) fall?: env?o {codigo_venta} rechazado por courier.")
                     QMessageBox.information(
                         self,
                         "Etiqueta Walmart NO creada",
                         "Etiqueta Walmart NO creada, informar a Wendy el numero de envio",
                     )
+                    estado = "Error"
                 elif plataforma == "walmart" and ("no se pudo obtener etiqueta" in msg_lower or "no generadas" in msg_lower):
-                    print(f"API ({plataforma}) falló: etiquetas no creadas en Walmart/Enviame para {codigo_venta}")
+                    print(f"API ({plataforma}) fall?: etiquetas no creadas en Walmart/Enviame para {codigo_venta}")
                     QMessageBox.information(
                         self,
-                        "Etiquetas no creadas en Walmart",
-                        "Etiquetas no creadas en Walmart (Enviame aún no las genera). Intente nuevamente más tarde.",
+                        "Etiquetas incompletas en Walmart",
+                        "Walmart a?n no crea todas las etiquetas, avisar a Wendy",
                     )
+                    estado = "Error Sin Etiquetas"
                 else:
-                    print(f"API ({plataforma}) falló:", exc)
-                estado = "Error"
-
+                    print(f"API ({plataforma}) fall?:", exc)
+                    estado = "Error"
         # Estado en UI
         self._set_estado_impresion(estado)
 
@@ -711,11 +721,15 @@ class VerificacionTab(QWidget):
     def _set_estado_impresion(self, estado: str):
         texto = estado if estado else "No impreso"
         estado_norm = texto.strip().lower()
-        color = {
-            "impreso": "green",
-            "error": "red",
-            "imprimiendo...": "#0078d4",
-            "no impreso": "gray",
-        }.get(estado_norm, "gray")
+        if "error" in estado_norm:
+            color = "red"
+        elif estado_norm.startswith("impreso"):
+            color = "green"
+        elif estado_norm.startswith("imprimiendo"):
+            color = "#0078d4"
+        elif estado_norm == "no impreso":
+            color = "gray"
+        else:
+            color = "gray"
         self.lbl_estado_impresion.setText(texto)
         self.lbl_estado_impresion.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 18px;")
