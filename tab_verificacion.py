@@ -292,7 +292,7 @@ class VerificacionTab(QWidget):
             return
 
         codigo_original = codigo
-        codigo_busqueda = codigo
+        codigo_busqueda = self._normalizar_codigo_busqueda(codigo)
 
         if len(codigo) == 8:
             self.procesar_codigo_producto(codigo)
@@ -305,7 +305,8 @@ class VerificacionTab(QWidget):
             QMessageBox.warning(self, "Sin archivo", "Primero carga el archivo de Multivende (menú Archivo).")
             return
 
-        filas = self.df_multivende[self.df_multivende.iloc[:, 7].astype(str) == codigo_busqueda]
+        codigos_norm = self.df_multivende.iloc[:, 7].astype(str).apply(self._normalizar_codigo_busqueda)
+        filas = self.df_multivende[codigos_norm == codigo_busqueda]
         if filas.empty:
             QMessageBox.information(self, "Sin resultados", f"No se encontraron filas con el código {codigo_original}.")
             return
@@ -403,11 +404,11 @@ class VerificacionTab(QWidget):
         codigo_actual = self.codigo_actual_mostrado or self.lbl_codigo.text().replace("Código venta:", "").strip()
         codigo_busqueda = self.codigo_actual_busqueda or codigo_actual
         estado = "No impreso"
-        df_imp_codigos = df_imp["CódigoVenta"].astype(str).str.strip().apply(self._normalizar_codigo)
+        df_imp_codigos = df_imp["CódigoVenta"].astype(str).str.strip().apply(self._normalizar_codigo_busqueda)
         for codigo_ref in [codigo_actual, codigo_busqueda]:
             if not codigo_ref:
                 continue
-            objetivo = self._normalizar_codigo(codigo_ref)
+            objetivo = self._normalizar_codigo_busqueda(codigo_ref)
             mask = df_imp_codigos == objetivo
             if mask.any():
                 estado = df_imp.loc[mask, "Estado"].iloc[-1]
@@ -468,7 +469,7 @@ class VerificacionTab(QWidget):
 
         estado = "Error"
 
-        # --- WooCommerce vía API Zipnova ---
+        # --- WooCommerce via API Zipnova ---
         if plataforma == "woocommerce":
             external_id = codigo_mostrado or codigo_venta
             if external_id and not str(external_id).upper().startswith("W"):
@@ -478,9 +479,19 @@ class VerificacionTab(QWidget):
                 print(f"Woo/Zipnova: Etiqueta API guardada en {etiqueta_path}")
                 estado = "Impreso"
             except Exception as exc:  # noqa: BLE001
-                print("Woo/Zipnova: Error al obtener etiqueta vía API:", exc)
+                print("Woo/Zipnova: Error al obtener etiqueta via API:", exc)
+                msg_lower = str(exc).lower()
+                if "external_id" in msg_lower or "no se encontraron env" in msg_lower:
+                    estado = "Error Pedido Procesando"
+                    QMessageBox.information(
+                        self,
+                        "Etiqueta aun no completa",
+                        "La etiqueta no esta en estado 'Completa' en la tienda online; avisar a Wendy.",
+                    )
+                else:
+                    estado = "Error"
 
-        # --- MercadoLibre vía API ---
+        # --- MercadoLibre via API ---
         elif plataforma == "mercadolibre":
             try:
                 etiqueta_path = descargar_etiqueta_mercadolibre(order_id=codigo_venta, response_type="zpl2")
@@ -489,15 +500,15 @@ class VerificacionTab(QWidget):
             except NonPrintableError as exc:
                 QMessageBox.information(
                     self,
-                    "Etiqueta se emitirá en la tarde o mañana",
-                    f"Mercado Libre indica que este envio es para entregar a la colecta mañana.\n{exc}",
+                    "Etiqueta se emitira en la tarde o manana",
+                    f"Mercado Libre indica que este envio es para entregar a la colecta manana.\n{exc}",
                 )
-                estado = "Error Colecta Mañana"
-                print(f"M: Etiqueta API no emitida (colecta mañana) para {codigo_venta}")
+                estado = "Error Colecta Manana"
+                print(f"M: Etiqueta API no emitida (colecta manana) para {codigo_venta}")
             except Exception as exc:  # noqa: BLE001
                 msg = str(exc)
                 if "INVALID_SHIPMENT_MODE" in msg or "ME1" in msg:
-                    print("M: Shipment ME1, intentando vía Zipnova (API)...")
+                    print("M: Shipment ME1, intentando via Zipnova (API)...")
                     try:
                         shipping_id = obtener_shipping_id(codigo_venta)
                         etiqueta_path = descargar_etiqueta_zipnova_por_external_id(
@@ -518,10 +529,10 @@ class VerificacionTab(QWidget):
                             print("M: Error Zipnova API por nombre:", zexc2)
                             estado = "Error"
                 else:
-                    print("M: Error al obtener etiqueta vía API:", exc)
+                    print("M: Error al obtener etiqueta via API:", exc)
                     estado = "Error"
 
-        # --- Walmart / Paris / Ripley vía APIs ---
+        # --- Walmart / Paris / Ripley via APIs ---
         elif plataforma in {"walmart", "paris", "ripley"}:
             try:
                 if plataforma == "walmart":
@@ -561,9 +572,8 @@ class VerificacionTab(QWidget):
                         QMessageBox.information(
                             self,
                             "Etiquetas incompletas en Walmart",
-                            "Walmart aún no crea todas las etiquetas, avisar a Wendy",
+                            "Walmart aun no crea todas las etiquetas, avisar a Wendy",
                         )
-                    
                 elif plataforma == "paris":
                     ruta = descargar_etiqueta_paris_cencosud(codigo_venta)
                     print(f"Paris/Cencosud: etiqueta guardada {ruta}")
@@ -575,7 +585,7 @@ class VerificacionTab(QWidget):
             except Exception as exc:  # noqa: BLE001
                 msg_lower = str(exc).lower()
                 if plataforma == "walmart" and "rechazado" in msg_lower:
-                    print(f"API ({plataforma}) fall?: env?o {codigo_venta} rechazado por courier.")
+                    print(f"API ({plataforma}) fallo: envio {codigo_venta} rechazado por courier.")
                     QMessageBox.information(
                         self,
                         "Etiqueta Walmart NO creada",
@@ -583,15 +593,23 @@ class VerificacionTab(QWidget):
                     )
                     estado = "Error"
                 elif plataforma == "walmart" and ("no se pudo obtener etiqueta" in msg_lower or "no generadas" in msg_lower):
-                    print(f"API ({plataforma}) fall?: etiquetas no creadas en Walmart/Enviame para {codigo_venta}")
+                    print(f"API ({plataforma}) fallo: etiquetas no creadas en Walmart/Enviame para {codigo_venta}")
                     QMessageBox.information(
                         self,
                         "Etiquetas incompletas en Walmart",
-                        "Walmart a?n no crea todas las etiquetas, avisar a Wendy",
+                        "Walmart aun no crea todas las etiquetas, avisar a Wendy",
+                    )
+                    estado = "Error Sin Etiquetas"
+                elif plataforma == "ripley" and ("404" in msg_lower or "no existe ninguna instancia" in msg_lower):
+                    print(f"API ({plataforma}) fallo: pedido sin etiquetas en Enviame para {codigo_venta} -> {exc}")
+                    QMessageBox.information(
+                        self,
+                        "Pedido sin etiquetas",
+                        "El pedido no esta creado en Enviame, avisar a Wendy.",
                     )
                     estado = "Error Sin Etiquetas"
                 else:
-                    print(f"API ({plataforma}) fall?:", exc)
+                    print(f"API ({plataforma}) fallo:", exc)
                     estado = "Error"
         # Estado en UI
         self._set_estado_impresion(estado)
@@ -717,6 +735,15 @@ class VerificacionTab(QWidget):
         if texto.startswith('="') and texto.endswith('"'):
             texto = texto[2:-1]
         return texto
+
+    def _normalizar_codigo_busqueda(self, codigo: str) -> str:
+        """
+        Normaliza el codigo de venta para busqueda, considerando '-' y "'" como equivalentes.
+        Esto permite que los codigos generados por algunos lectores (que devuelven ' en lugar de -)
+        encuentren el valor correcto guardado en Excel.
+        """
+        texto = self._normalizar_codigo(codigo)
+        return texto.replace("'", "-")
 
     def _set_estado_impresion(self, estado: str):
         texto = estado if estado else "No impreso"
