@@ -572,7 +572,7 @@ class VerificacionTab(QWidget):
                         "Etiqueta Walmart NO creada",
                         "Etiqueta Walmart NO creada, informar a Wendy el numero de envio",
                     )
-                elif plataforma == "walmart" and "no se pudo obtener etiqueta" in msg_lower:
+                elif plataforma == "walmart" and ("no se pudo obtener etiqueta" in msg_lower or "no generadas" in msg_lower):
                     print(f"API ({plataforma}) falló: etiquetas no creadas en Walmart/Enviame para {codigo_venta}")
                     QMessageBox.information(
                         self,

@@ -200,9 +200,8 @@ def _collect_matches_shipment(
   api_key: str,
   api_base: str,
   seller_id: str,
-  max_pages: int = 50,
-  limit: int = 100,
-  stop_after_first_match: bool = False,
+  limit: int = 50,
+  stop_after_first_match: bool = False,  # kept for signature compatibility
 ) -> List[Dict[str, Any]]:
   matches: List[Dict[str, Any]] = []
 
@@ -219,34 +218,18 @@ def _collect_matches_shipment(
     if filtered:
       return filtered
 
-  # Fallback: paginar todo el listado.
-  found_page: Optional[int] = None
-
-  for page in range(1, max_pages + 1):
-    url = f"{api_base}/s2/v2/companies/{quote(seller_id)}/deliveries?page={page}&limit={limit}"
-    body = http_get(url, headers={"api-key": api_key, "Accept": "application/json"})
-    data = json.loads(body)
-    items = data.get("data", [])
-    if not isinstance(items, list) or not items:
-      break
-
-    for item in items:
-      if not isinstance(item, dict):
-        continue
-      if str(item.get("tracking_number")) == shipping_number or str(item.get("imported_id")) == shipping_number:
-        matches.append(item)
-        if found_page is None:
-          found_page = page
-
-    if found_page is not None:
-      if stop_after_first_match:
-        break
-      if page >= found_page+1:
-        break
-
-    if len(items) < limit:
-      break
-
+  # Fallback limitado: solo la primera página, para evitar llamadas lentas.
+  url = f"{api_base}/s2/v2/companies/{quote(seller_id)}/deliveries?page=1&limit={limit}"
+  body = http_get(url, headers={"api-key": api_key, "Accept": "application/json"})
+  data = json.loads(body)
+  items = data.get("data", [])
+  if not isinstance(items, list) or not items:
+    return []
+  for item in items:
+    if not isinstance(item, dict):
+      continue
+    if str(item.get("tracking_number")) == shipping_number or str(item.get("imported_id")) == shipping_number:
+      matches.append(item)
   return matches
 
 
@@ -320,11 +303,16 @@ def descargar_etiquetas_enviame_por_shipping(
   seller_id = _seller_id(env)
   out_dir = _output_dir(env)
 
-  deliveries = _collect_matches_shipment(shipping_number, api_key, api_base, seller_id, stop_after_first_match=stop_after_first_match)
+  deliveries = _collect_matches_shipment(
+    shipping_number,
+    api_key,
+    api_base,
+    seller_id,
+    stop_after_first_match=stop_after_first_match,
+  )
   if not deliveries:
     raise RuntimeError(
-      f"No se encontraron fletes para el numero de envio {shipping_number}. "
-      "Verifica tracking_number/imported_id y que el seller_id sea correcto."
+      f"Etiquetas Walmart no generadas aun para el numero de envio {shipping_number}."
     )
 
   saved: List[str] = []
