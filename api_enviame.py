@@ -200,36 +200,54 @@ def _collect_matches_shipment(
   api_key: str,
   api_base: str,
   seller_id: str,
-  limit: int = 50,
+  limit: int = 200,
   stop_after_first_match: bool = False,  # kept for signature compatibility
 ) -> List[Dict[str, Any]]:
   matches: List[Dict[str, Any]] = []
 
-  def _try_filtered(param: str) -> List[Dict[str, Any]]:
-    url = f"{api_base}/s2/v2/companies/{quote(seller_id)}/deliveries?{param}={quote(str(shipping_number))}&limit={limit}"
-    body = http_get(url, headers={"api-key": api_key, "Accept": "application/json"})
-    data = json.loads(body)
-    items = data.get("data", [])
-    return items if isinstance(items, list) else []
+  def _paged_filtered(param: str) -> List[Dict[str, Any]]:
+    # Itera paginado para no perder bultos cuando hay más de `limit`.
+    page = 1
+    encontrados: List[Dict[str, Any]] = []
+    while True:
+      url = (
+        f"{api_base}/s2/v2/companies/{quote(seller_id)}/deliveries?"
+        f"{param}={quote(str(shipping_number))}&page={page}&limit={limit}"
+      )
+      body = http_get(url, headers={"api-key": api_key, "Accept": "application/json"})
+      data = json.loads(body)
+      items = data.get("data", [])
+      if not isinstance(items, list) or not items:
+        break
+      encontrados.extend(items)
+      if len(items) < limit:
+        break
+      page += 1
+    return encontrados
 
-  # Primero intenta filtrar directamente por imported_id o tracking_number (mucho más rápido).
+  # Primero intenta filtrar directamente por imported_id o tracking_number (más rápido y con paginado).
   for param in ("imported_id", "tracking_number"):
-    filtered = _try_filtered(param)
+    filtered = _paged_filtered(param)
     if filtered:
       return filtered
 
-  # Fallback limitado: solo la primera página, para evitar llamadas lentas.
-  url = f"{api_base}/s2/v2/companies/{quote(seller_id)}/deliveries?page=1&limit={limit}"
-  body = http_get(url, headers={"api-key": api_key, "Accept": "application/json"})
-  data = json.loads(body)
-  items = data.get("data", [])
-  if not isinstance(items, list) or not items:
-    return []
-  for item in items:
-    if not isinstance(item, dict):
-      continue
-    if str(item.get("tracking_number")) == shipping_number or str(item.get("imported_id")) == shipping_number:
-      matches.append(item)
+  # Fallback paginado general para evitar perder resultados.
+  page = 1
+  while True:
+    url = f"{api_base}/s2/v2/companies/{quote(seller_id)}/deliveries?page={page}&limit={limit}"
+    body = http_get(url, headers={"api-key": api_key, "Accept": "application/json"})
+    data = json.loads(body)
+    items = data.get("data", [])
+    if not isinstance(items, list) or not items:
+      break
+    for item in items:
+      if not isinstance(item, dict):
+        continue
+      if str(item.get("tracking_number")) == shipping_number or str(item.get("imported_id")) == shipping_number:
+        matches.append(item)
+    if len(items) < limit:
+      break
+    page += 1
   return matches
 
 
@@ -322,25 +340,41 @@ def descargar_etiquetas_enviame_por_shipping(
     candidates = [d.get("identifier"), d.get("tracking_number"), d.get("id"), d.get("delivery_id")]
     tried = set()
     success = False
-    for cid in candidates:
-      if not cid or cid in tried:
-        continue
-      tried.add(cid)
+    # Usa primero la etiqueta que ya viene en el listado (evita pedir cada delivery).
+    label = d.get("label")
+    source = _classify_zpl(label.get("ZPL") if isinstance(label, dict) else label) if label else None
+    if source:
       try:
-        payload = _fetch_delivery(api_key, api_base, str(cid))
-        label = payload.get("data", {}).get("label")
-        source = _classify_zpl(label.get("ZPL") if isinstance(label, dict) else label)
-        if not source:
-          continue
         zpl = _download_zpl_from_source(source)
-        name_part = tracking or cid
+        name_part = tracking or imported_id
         dest = out_dir / f"{imported_id}-{name_part}.zpl"
         dest.write_text(zpl["content"], encoding="utf-8")
         saved.append(str(dest))
         success = True
-        break
       except Exception:
-        continue
+        success = False
+
+    # Si no hay label en la lista o falló, consulta el delivery puntual como fallback.
+    if not success:
+      for cid in candidates:
+        if not cid or cid in tried:
+          continue
+        tried.add(cid)
+        try:
+          payload = _fetch_delivery(api_key, api_base, str(cid))
+          label = payload.get("data", {}).get("label")
+          source = _classify_zpl(label.get("ZPL") if isinstance(label, dict) else label)
+          if not source:
+            continue
+          zpl = _download_zpl_from_source(source)
+          name_part = tracking or cid
+          dest = out_dir / f"{imported_id}-{name_part}.zpl"
+          dest.write_text(zpl["content"], encoding="utf-8")
+          saved.append(str(dest))
+          success = True
+          break
+        except Exception:
+          continue
     if not success:
       raise RuntimeError(f"No se pudo obtener etiqueta para el envio {d}")
 
