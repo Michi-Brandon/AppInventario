@@ -3,3 +3,4 @@ openpyxl
 PyQt6
 watchdog
 requests
+pyinstaller
