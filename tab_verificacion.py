@@ -35,6 +35,7 @@ from api_paris_cencosud import descargar_etiqueta_paris_cencosud
 
 from movimientos_utils import forzar_columnas_texto_excel, guardar_movimientos_excel
 from operadores import OPERADORES
+from rutas_multivende import resolver_rutas_multivende
 
 
 class LineaCodigoFija(QLineEdit):
@@ -91,6 +92,7 @@ class VerificacionTab(QWidget):
         self.codigo_actual_busqueda = ""
         self.nombre_cliente_actual = ""
         self._last_files_signature = None
+        self.rutas = resolver_rutas_multivende(self.config)
 
         self._build_ui()
 
@@ -212,7 +214,17 @@ class VerificacionTab(QWidget):
     # Flujo principal
     # ------------------------------------------------------------------
     def cargar_excel(self, mostrar_mensaje=True):
-        carpeta = self.config["carpeta_multivende"]
+        carpeta = self.rutas["archivos"]
+        if not carpeta:
+            if mostrar_mensaje:
+                QMessageBox.warning(
+                    self,
+                    "Sin ruta",
+                    "No hay ruta configurada para leer los Excel de Multivende.",
+                )
+            else:
+                print("[AUTO] No hay ruta configurada para leer Multivende.")
+            return
         archivos = glob.glob(os.path.join(carpeta, "*.xls*"))
 
         if not archivos:
@@ -388,9 +400,9 @@ class VerificacionTab(QWidget):
             self.input_codigo.setFocus()
 
     def mostrar_tabla(self, df):
-        etiquetas_path = os.path.join(self.config["carpeta_multivende"], "Etiquetas")
+        etiquetas_path = self.rutas["etiquetas"]
         os.makedirs(etiquetas_path, exist_ok=True)
-        registro_path = os.path.join(etiquetas_path, "registro_impresiones.xlsx")
+        registro_path = self.rutas["registro_impresiones"]
         if os.path.exists(registro_path):
             df_imp = pd.read_excel(registro_path, dtype=str)
         else:
@@ -644,9 +656,12 @@ class VerificacionTab(QWidget):
             )
             return
 
-        movimientos_dir = os.path.join(self.config["carpeta_multivende"], "Movimientos")
+        movimientos_dir = self.rutas["movimientos"]
+        movimientos_path = self.rutas["movimientos_excel"]
+        if not movimientos_dir or not movimientos_path:
+            QMessageBox.critical(self, "Ruta no configurada", "No se pudo determinar la carpeta de Movimientos.")
+            return
         os.makedirs(movimientos_dir, exist_ok=True)
-        movimientos_path = os.path.join(movimientos_dir, "movimientos.xlsx")
 
         columnas = [
             "Tipo Movimiento",
@@ -697,9 +712,9 @@ class VerificacionTab(QWidget):
         self.btn_esquema.setChecked(esquema)
 
     def _registrar_impresion(self, codigo_venta: str, estado: str):
-        etiquetas_path = os.path.join(self.config["carpeta_multivende"], "Etiquetas")
+        etiquetas_path = self.rutas["etiquetas"]
         os.makedirs(etiquetas_path, exist_ok=True)
-        registro_path = os.path.join(etiquetas_path, "registro_impresiones.xlsx")
+        registro_path = self.rutas["registro_impresiones"]
 
         df_registro = (
             pd.read_excel(registro_path, dtype=str)

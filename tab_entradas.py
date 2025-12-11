@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
 
 from movimientos_utils import guardar_movimientos_excel
 from operadores import OPERADORES
+from rutas_multivende import resolver_rutas_multivende
 
 
 class EntradasTab(QWidget):
@@ -30,6 +31,7 @@ class EntradasTab(QWidget):
     def __init__(self, config: dict, parent=None, on_entrada_registrada=None):
         super().__init__(parent)
         self.config = config
+        self.rutas = resolver_rutas_multivende(self.config)
         self.on_entrada_registrada = on_entrada_registrada
         self.columnas = [
             "Tipo Movimiento",
@@ -40,11 +42,7 @@ class EntradasTab(QWidget):
             "Operador",
             "Fecha",
         ]
-        self.movimientos_path = os.path.join(
-            self.config.get("carpeta_multivende", ""),
-            "Movimientos",
-            "movimientos.xlsx",
-        )
+        self.movimientos_path = self.rutas["movimientos_excel"]
         self.df_movimientos = pd.DataFrame(columns=self.columnas)
 
         self.auto_focus_activo = True

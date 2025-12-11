@@ -16,6 +16,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from rutas_multivende import resolver_rutas_multivende
+
 
 class StockTab(QWidget):
     """Resumen de stock a partir del Excel de movimientos."""
@@ -23,12 +25,9 @@ class StockTab(QWidget):
     def __init__(self, config: dict, parent=None):
         super().__init__(parent)
         self.config = config
+        self.rutas = resolver_rutas_multivende(self.config)
         self.columnas_tabla = ["Codigo", "Entradas", "Salidas", "Stock"]
-        self.movimientos_path = os.path.join(
-            self.config.get("carpeta_multivende", ""),
-            "Movimientos",
-            "movimientos.xlsx",
-        )
+        self.movimientos_path = self.rutas["movimientos_excel"]
         self.df_stock = pd.DataFrame(columns=self.columnas_tabla)
         self.ultima_actualizacion = None
 

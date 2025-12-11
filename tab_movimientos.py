@@ -19,6 +19,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from rutas_multivende import resolver_rutas_multivende
+
 
 class MovimientosTab(QWidget):
     """Muestra el Excel de movimientos con filtros rapidos y buscadores."""
@@ -26,6 +28,7 @@ class MovimientosTab(QWidget):
     def __init__(self, config: dict, parent=None):
         super().__init__(parent)
         self.config = config
+        self.rutas = resolver_rutas_multivende(self.config)
         self.columnas = [
             "Tipo Movimiento",
             "Nota de Venta",
@@ -36,11 +39,7 @@ class MovimientosTab(QWidget):
             "Fecha",
         ]
         self.rango_activo = "dia"
-        self.movimientos_path = os.path.join(
-            self.config.get("carpeta_multivende", ""),
-            "Movimientos",
-            "movimientos.xlsx",
-        )
+        self.movimientos_path = self.rutas["movimientos_excel"]
         self.df_movimientos = pd.DataFrame(columns=self.columnas)
         self.ultima_actualizacion = None
 
