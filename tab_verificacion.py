@@ -498,7 +498,7 @@ class VerificacionTab(QWidget):
                     QMessageBox.information(
                         self,
                         "Etiqueta aun no completa",
-                        "La etiqueta no esta en estado 'Completa' en la tienda online; avisar a Wendy.",
+                        "La etiqueta no esta en estado 'Completa' en la tienda online o es Recogida Local; avisar a Wendy.",
                     )
                 else:
                     estado = "Error"
