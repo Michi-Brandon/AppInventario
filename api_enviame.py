@@ -230,25 +230,8 @@ def _collect_matches_shipment(
     filtered = _paged_filtered(param)
     if filtered:
       return filtered
-
-  # Fallback paginado general para evitar perder resultados.
-  page = 1
-  while True:
-    url = f"{api_base}/s2/v2/companies/{quote(seller_id)}/deliveries?page={page}&limit={limit}"
-    body = http_get(url, headers={"api-key": api_key, "Accept": "application/json"})
-    data = json.loads(body)
-    items = data.get("data", [])
-    if not isinstance(items, list) or not items:
-      break
-    for item in items:
-      if not isinstance(item, dict):
-        continue
-      if str(item.get("tracking_number")) == shipping_number or str(item.get("imported_id")) == shipping_number:
-        matches.append(item)
-    if len(items) < limit:
-      break
-    page += 1
-  return matches
+  # Si no hay resultados, devolvemos vacío (las etiquetas aún no existen).
+  return []
 
 
 def marcar_impreso_enviame_por_shipping(

@@ -119,6 +119,14 @@ class VerificacionTab(QWidget):
         fila_operador_vista.addLayout(operador_box)
         fila_operador_vista.addStretch()
 
+        self.btn_modo_imp = QPushButton("Modo Impresión")
+        self.btn_modo_imp.setCheckable(True)
+        self.btn_modo_imp.setToolTip(
+            "Si esta activo, al escanear una venta se descarga la etiqueta automaticamente."
+        )
+        self.btn_modo_imp.toggled.connect(self._actualizar_modo_imp_style)
+        self._actualizar_modo_imp_style(False)
+
         vista_box = QHBoxLayout()
         lbl_vista = QLabel("Vista:")
         self.btn_tabla = QPushButton("Tabla")
@@ -131,7 +139,12 @@ class VerificacionTab(QWidget):
         vista_box.addWidget(lbl_vista)
         vista_box.addWidget(self.btn_tabla)
         vista_box.addWidget(self.btn_esquema)
-        fila_operador_vista.addLayout(vista_box)
+
+        vista_col = QVBoxLayout()
+        vista_col.addWidget(self.btn_modo_imp, alignment=Qt.AlignmentFlag.AlignLeft)
+        vista_col.addLayout(vista_box)
+
+        fila_operador_vista.addLayout(vista_col)
 
         # Bloque de info grande (Cliente / Canal / Productos / Escaneados)
         fuente_titulo = QFont("Segoe UI", 18, QFont.Weight.Bold)
@@ -355,6 +368,10 @@ class VerificacionTab(QWidget):
         self.mostrar_tabla(df)
         self.txt_incorrectos.setText("")
         self.input_codigo.setFocus()
+
+        if self.btn_modo_imp.isChecked():
+            # En modo IMP, dispara la descarga de etiqueta apenas se escanea la venta.
+            QTimer.singleShot(50, self.imprimir_etiqueta_automatica)
 
     def procesar_codigo_producto(self, codigo_prod: str):
         if getattr(self, "df_tabla", None) is None or self.df_tabla.empty:
@@ -710,6 +727,14 @@ class VerificacionTab(QWidget):
         self.vista_esquema = esquema
         self.btn_tabla.setChecked(not esquema)
         self.btn_esquema.setChecked(esquema)
+
+    def _actualizar_modo_imp_style(self, activo: bool):
+        if not hasattr(self, "btn_modo_imp"):
+            return
+        if activo:
+            self.btn_modo_imp.setStyleSheet("background-color: #0078d4; color: white; font-weight: bold;")
+        else:
+            self.btn_modo_imp.setStyleSheet("")
 
     def _registrar_impresion(self, codigo_venta: str, estado: str):
         etiquetas_path = self.rutas["etiquetas"]
