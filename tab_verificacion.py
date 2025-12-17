@@ -1,7 +1,7 @@
 import glob
 import os
 from datetime import datetime
-from typing import Callable, Optional
+from typing import Callable, Optional, Set
 
 import pandas as pd
 from PyQt6.QtCore import QEvent, QTimer, Qt
@@ -93,6 +93,12 @@ class VerificacionTab(QWidget):
         self.nombre_cliente_actual = ""
         self._last_files_signature = None
         self.rutas = resolver_rutas_multivende(self.config)
+        self._habilitados_cache = None
+        self._habilitados_cache_mtime = None
+        self._habilitados_archivo = None
+        self._requiere_escaneo_habilitados = False
+        self._auto_impresion_pendiente = False
+        self._alerta_inventario_mostrada = False
 
         self._build_ui()
 
@@ -178,9 +184,9 @@ class VerificacionTab(QWidget):
         self.tabla = QTableWidget()
         self.tabla.setColumnCount(4)
         self.tabla.setHorizontalHeaderLabels(["Código Producto", "Nombre Producto", "Cantidad", "Escaneado"])
-        tabla_scroll = QScrollArea()
-        tabla_scroll.setWidgetResizable(True)
-        tabla_scroll.setWidget(self.tabla)
+        self.tabla_scroll = QScrollArea()
+        self.tabla_scroll.setWidgetResizable(True)
+        self.tabla_scroll.setWidget(self.tabla)
 
         # Bloque de códigos incorrectos
         self.txt_incorrectos = QTextEdit()
@@ -202,7 +208,7 @@ class VerificacionTab(QWidget):
         self.txt_incorrectos.setPlaceholderText("Códigos incorrectos escaneados aparecerán aquí...")
 
         contenedor_tabla = QVBoxLayout()
-        contenedor_tabla.addWidget(tabla_scroll, stretch=7)
+        contenedor_tabla.addWidget(self.tabla_scroll, stretch=7)
         contenedor_tabla.addWidget(self.txt_incorrectos, stretch=3)
 
         # Botones inferiores
@@ -210,7 +216,7 @@ class VerificacionTab(QWidget):
         self.btn_generar_salida = QPushButton("Generar Salida")
         self.btn_imprimir = QPushButton("Imprimir etiqueta")
         self.btn_generar_salida.clicked.connect(self.generar_salida)
-        self.btn_imprimir.clicked.connect(self.imprimir_etiqueta_automatica)
+        self.btn_imprimir.clicked.connect(lambda: self.imprimir_etiqueta_automatica(manual=True))
         pie.addStretch()
         pie.addWidget(self.btn_generar_salida)
         pie.addWidget(self.btn_imprimir)
@@ -364,6 +370,9 @@ class VerificacionTab(QWidget):
             }
         )
         self.df_tabla = df.copy()
+        codigo_col = df.columns[0]
+        self._requiere_escaneo_habilitados = self._venta_requiere_escaneo(df[codigo_col])
+        self._auto_impresion_pendiente = False
 
         self.mostrar_tabla(df)
         self.txt_incorrectos.setText("")
@@ -371,7 +380,10 @@ class VerificacionTab(QWidget):
 
         if self.btn_modo_imp.isChecked():
             # En modo IMP, dispara la descarga de etiqueta apenas se escanea la venta.
-            QTimer.singleShot(50, self.imprimir_etiqueta_automatica)
+            if self._requiere_escaneo_habilitados:
+                self._auto_impresion_pendiente = True
+            else:
+                QTimer.singleShot(50, lambda: self.imprimir_etiqueta_automatica(manual=False))
 
     def procesar_codigo_producto(self, codigo_prod: str):
         if getattr(self, "df_tabla", None) is None or self.df_tabla.empty:
@@ -398,6 +410,13 @@ class VerificacionTab(QWidget):
 
             self.df_tabla = df
             self.mostrar_tabla(df)
+            if (
+                self._auto_impresion_pendiente
+                and self.btn_modo_imp.isChecked()
+                and self._escaneo_completo()
+            ):
+                self._auto_impresion_pendiente = False
+                QTimer.singleShot(50, lambda: self.imprimir_etiqueta_automatica(manual=False))
         else:
             texto = self.txt_incorrectos.toPlainText()
             hora_actual = datetime.now().strftime("%H:%M:%S")
@@ -468,8 +487,21 @@ class VerificacionTab(QWidget):
                 self.tabla.setItem(i, j, item)
 
         self.tabla.resizeColumnsToContents()
+        self._actualizar_estilo_tabla_inventario()
 
-    def imprimir_etiqueta_automatica(self):
+    def imprimir_etiqueta_automatica(self, manual: bool = False):
+        if self._requiere_escaneo_habilitados and not self._escaneo_completo():
+            if manual:
+                QMessageBox.warning(
+                    self,
+                    "Escaneo requerido",
+                    "Debe escanear todos los productos habilitados antes de imprimir la etiqueta.",
+                )
+            else:
+                if self.lbl_estado_impresion.text().strip().lower() in {"no impreso", ""}:
+                    self._set_estado_impresion("Requiere escaneo")
+            return
+
         self._set_estado_impresion("Imprimiendo...")
         self.btn_imprimir.setEnabled(False)
         QApplication.processEvents()
@@ -774,6 +806,9 @@ class VerificacionTab(QWidget):
             texto = texto.lstrip("'")
         if texto.startswith('="') and texto.endswith('"'):
             texto = texto[2:-1]
+        texto = texto.strip()
+        if texto.endswith(".0") and texto[:-2].isdigit():
+            texto = texto[:-2]
         return texto
 
     def _normalizar_codigo_busqueda(self, codigo: str) -> str:
@@ -784,6 +819,137 @@ class VerificacionTab(QWidget):
         """
         texto = self._normalizar_codigo(codigo)
         return texto.replace("'", "-")
+
+    def _obtener_archivo_inventario(self) -> Optional[str]:
+        base_dir = self.rutas.get("base") or ""
+        if not base_dir:
+            return None
+        inventario_dir = os.path.join(base_dir, "Inventario")
+        if not os.path.isdir(inventario_dir):
+            return None
+        patron = os.path.join(inventario_dir, "productos_inventario*.xls*")
+        archivos = glob.glob(patron)
+        if not archivos:
+            return None
+        return max(archivos, key=os.path.getmtime)
+
+    def _cargar_habilitados(self) -> Set[str]:
+        archivo = self._obtener_archivo_inventario()
+        if not archivo:
+            return set()
+
+        try:
+            mtime = os.path.getmtime(archivo)
+        except OSError:
+            return set()
+
+        if (
+            self._habilitados_cache is not None
+            and self._habilitados_cache_mtime == mtime
+            and self._habilitados_archivo == archivo
+        ):
+            return self._habilitados_cache
+
+        try:
+            df = pd.read_excel(archivo, sheet_name=0, dtype=str)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[Inventario] Error al leer {archivo}: {exc}")
+            self._habilitados_cache = set()
+            self._habilitados_cache_mtime = mtime
+            self._habilitados_archivo = archivo
+            return set()
+
+        columna = None
+        for col in df.columns:
+            if str(col).strip().lower() == "habilitado":
+                columna = col
+                break
+        if not columna:
+            print(f"[Inventario] No se encontro columna 'Habilitado' en {archivo}")
+            self._habilitados_cache = set()
+            self._habilitados_cache_mtime = mtime
+            self._habilitados_archivo = archivo
+            return set()
+
+        codigos = set()
+        for valor in df[columna].dropna():
+            codigo = self._normalizar_codigo(valor)
+            if codigo:
+                codigos.add(codigo)
+
+        habilitados = set(codigos)
+        for codigo in codigos:
+            if len(codigo) == 8 and codigo.startswith("2") and codigo[1:].isdigit():
+                habilitados.add(f"1{codigo[1:]}")
+
+        self._habilitados_cache = habilitados
+        self._habilitados_cache_mtime = mtime
+        self._habilitados_archivo = archivo
+        return habilitados
+
+    def _venta_requiere_escaneo(self, codigos_producto: pd.Series) -> bool:
+        habilitados = self._cargar_habilitados()
+        if not habilitados:
+            if not self._alerta_inventario_mostrada:
+                QMessageBox.warning(
+                    self,
+                    "Inventario",
+                    "No se pudo cargar la lista de habilitados. Se permitira imprimir sin escaneo.",
+                )
+                self._alerta_inventario_mostrada = True
+            return False
+
+        codigos = codigos_producto.astype(str).map(self._normalizar_codigo)
+        codigos_unicos = {codigo for codigo in codigos if codigo}
+        if not codigos_unicos:
+            return False
+        for codigo in codigos_unicos:
+            if codigo not in habilitados:
+                return False
+        return True
+
+    def _escaneo_completo(self) -> bool:
+        if getattr(self, "df_tabla", None) is None or self.df_tabla.empty:
+            return False
+        pendientes = self.df_tabla[self.df_tabla["Escaneado"] != self.df_tabla["Cantidad"]]
+        return pendientes.empty
+
+    def _actualizar_estilo_tabla_inventario(self) -> None:
+        if not hasattr(self, "tabla"):
+            return
+
+        if not self._requiere_escaneo_habilitados:
+            self.tabla.setStyleSheet("")
+            if hasattr(self, "tabla_scroll"):
+                self.tabla_scroll.setStyleSheet("")
+            return
+
+        if self._escaneo_completo():
+            borde = "#0b5d1e"
+            fondo = "#e8f7ea"
+        else:
+            borde = "#7a1b1b"
+            fondo = "#fdecec"
+
+        estilo_tabla = (
+            "QTableWidget {"
+            " border: none;"
+            f" background-color: {fondo};"
+            "}"
+            "QTableWidget::viewport {"
+            f" background-color: {fondo};"
+            "}"
+        )
+        self.tabla.setStyleSheet(estilo_tabla)
+
+        if hasattr(self, "tabla_scroll"):
+            estilo_scroll = (
+                "QScrollArea {"
+                f" border: 2px solid {borde};"
+                f" background-color: {fondo};"
+                "}"
+            )
+            self.tabla_scroll.setStyleSheet(estilo_scroll)
 
     def _set_estado_impresion(self, estado: str):
         texto = estado if estado else "No impreso"
