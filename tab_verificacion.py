@@ -379,7 +379,15 @@ class VerificacionTab(QWidget):
             return
 
         df = self.df_tabla.copy()
-        encontrados = df[df["Código Producto"].astype(str) == codigo_prod]
+        codigo_col = df.columns[0]
+        codigo_norm = self._normalizar_codigo(codigo_prod)
+        candidatos = {codigo_norm} if codigo_norm else set()
+        if codigo_norm and codigo_norm[0] in {'1', '2'} and codigo_norm[1:].isdigit():
+            prefijo = '1' if codigo_norm[0] == '2' else '2'
+            candidatos.add(f"{prefijo}{codigo_norm[1:]}")
+        
+        codigos_df = df[codigo_col].astype(str).map(self._normalizar_codigo)
+        encontrados = df[codigos_df.isin(candidatos)] if candidatos else df.iloc[0:0]
 
         if not encontrados.empty:
             idx = encontrados.index[0]
