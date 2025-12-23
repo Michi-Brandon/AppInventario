@@ -1,13 +1,13 @@
 import glob
 import os
+import threading
 from datetime import datetime
-from typing import Callable, Optional
+from typing import Callable, List, Optional, Tuple
 
 import pandas as pd
-from PyQt6.QtCore import QEvent, QTimer, Qt
+from PyQt6.QtCore import QEvent, QObject, QThread, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QBrush
 from PyQt6.QtWidgets import (
-    QApplication,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -36,6 +36,217 @@ from api_paris_cencosud import descargar_etiqueta_paris_cencosud
 from movimientos_utils import forzar_columnas_texto_excel, guardar_movimientos_excel
 from operadores import OPERADORES
 from rutas_multivende import resolver_rutas_multivende
+
+
+def _descargar_etiqueta_en_segundo_plano(
+    plataforma: str,
+    codigo_venta: str,
+    codigo_mostrado: str,
+    total_productos: int,
+    nombre_cliente: str,
+) -> dict:
+    """
+    Ejecuta la descarga de la etiqueta en segundo plano y devuelve
+    el estado junto a los mensajes que se deben mostrar en la UI.
+    """
+    mensajes: List[Tuple[str, str, str]] = []
+    estado = "Error"
+    codigo_registro = codigo_mostrado or codigo_venta
+
+    try:
+        if plataforma == "woocommerce":
+            external_id = codigo_mostrado or codigo_venta
+            if external_id and not str(external_id).upper().startswith("W"):
+                external_id = f"W{external_id}"
+            try:
+                etiqueta_path = descargar_etiqueta_zipnova_por_external_id(external_id, fmt="zpl")
+                print(f"Woo/Zipnova: Etiqueta API guardada en {etiqueta_path}")
+                estado = "Impreso"
+            except Exception as exc:  # noqa: BLE001
+                print("Woo/Zipnova: Error al obtener etiqueta via API:", exc)
+                msg_lower = str(exc).lower()
+                if "external_id" in msg_lower or "no se encontraron env" in msg_lower:
+                    estado = "Error Pedido Procesando"
+                    mensajes.append(
+                        (
+                            "info",
+                            "Etiqueta aun no completa",
+                            "La etiqueta no esta en estado 'Completa' en la tienda online o es Recogida Local; avisar a Wendy.",
+                        )
+                    )
+                else:
+                    estado = "Error"
+
+        elif plataforma == "mercadolibre":
+            try:
+                etiqueta_path = descargar_etiqueta_mercadolibre(order_id=codigo_venta, response_type="zpl2")
+                print(f"M: Etiqueta API guardada en {etiqueta_path}")
+                estado = "Impreso"
+            except NonPrintableError as exc:
+                mensajes.append(
+                    (
+                        "info",
+                        "Etiqueta se emitira en la tarde o manana",
+                        f"Mercado Libre indica que este envio es para entregar a la colecta manana.\n{exc}",
+                    )
+                )
+                estado = "Error Colecta Manana"
+                print(f"M: Etiqueta API no emitida (colecta manana) para {codigo_venta}")
+            except Exception as exc:  # noqa: BLE001
+                msg = str(exc)
+                if "INVALID_SHIPMENT_MODE" in msg or "ME1" in msg:
+                    print("M: Shipment ME1, intentando via Zipnova (API)...")
+                    try:
+                        shipping_id = obtener_shipping_id(codigo_venta)
+                        etiqueta_path = descargar_etiqueta_zipnova_por_external_id(
+                            str(shipping_id), fmt="zpl", file_name=codigo_venta
+                        )
+                        print(f"M: Etiqueta Zipnova API guardada en {etiqueta_path} (shipping_id={shipping_id})")
+                        estado = "Impreso"
+                    except Exception as zexc:  # noqa: BLE001
+                        print("M: Error Zipnova API por shipping_id, probando por nombre:", zexc)
+                        try:
+                            etiqueta_path = descargar_etiqueta_zipnova_por_nombre(
+                                nombre_cliente=nombre_cliente or "",
+                                fmt="zpl",
+                            )
+                            print(f"M: Etiqueta Zipnova API guardada en {etiqueta_path}")
+                            estado = "Impreso"
+                        except Exception as zexc2:  # noqa: BLE001
+                            print("M: Error Zipnova API por nombre:", zexc2)
+                            estado = "Error"
+                else:
+                    print("M: Error al obtener etiqueta via API:", exc)
+                    estado = "Error"
+
+        elif plataforma in {"walmart", "paris", "ripley"}:
+            try:
+                if plataforma == "walmart":
+                    stop_una_pagina = total_productos == 1
+                    rutas = descargar_etiquetas_enviame_por_shipping(
+                        codigo_venta, canal="walmart", stop_after_first_match=stop_una_pagina
+                    )
+                    folios = []
+                    for ruta in rutas:
+                        nombre = os.path.splitext(os.path.basename(ruta))[0]
+                        partes = nombre.split("-")
+                        if len(partes) >= 2:
+                            folios.append(partes[1])
+                    folios_unicos = sorted(set(folios))
+                    folios_str = "-".join([f for f in folios_unicos if f])
+                    etiqueta_msg = f"{codigo_venta}-{folios_str}" if folios_str else str(codigo_venta)
+                    print(f"Walmart/Enviame: etiquetas guardadas: {etiqueta_msg}")
+                    # Marcar como impreso se hace en segundo plano para no bloquear la UI.
+                    def _marcar_impreso_async():
+                        try:
+                            marcar_impreso_enviame_por_shipping(
+                                codigo_venta,
+                                canal="walmart",
+                                stop_after_first_match=stop_una_pagina,
+                            )
+                            print(f"Walmart/Enviame: deliveries marcados como impreso: {codigo_venta}")
+                        except Exception as mark_exc:  # noqa: BLE001
+                            print(f"Walmart/Enviame: no se pudo marcar como impreso -> {mark_exc}")
+
+                    threading.Thread(target=_marcar_impreso_async, daemon=True).start()
+                    total_folios = len(folios_unicos)
+                    estado = "Impreso"
+                    if total_folios == 0:
+                        estado = "Error Sin Etiquetas"
+                        print(f"Walmart/Enviame: sin etiquetas generadas para {codigo_venta}")
+                    elif total_folios < total_productos:
+                        estado = "Error Faltan Etiquetas"
+                        print(
+                            f"Walmart/Enviame: folios obtenidos ({total_folios}) no coinciden con productos ({total_productos})"
+                        )
+                    if estado.startswith("Error"):
+                        mensajes.append(
+                            (
+                                "info",
+                                "Etiquetas incompletas en Walmart",
+                                "Walmart aun no crea todas las etiquetas, avisar a Wendy",
+                            )
+                        )
+                elif plataforma == "paris":
+                    ruta = descargar_etiqueta_paris_cencosud(codigo_venta)
+                    print(f"Paris/Cencosud: etiqueta guardada {ruta}")
+                    estado = "Impreso"
+                else:
+                    ruta = descargar_etiqueta_enviame_por_delivery(codigo_venta, canal=plataforma)
+                    print(f"{plataforma.capitalize()}/Enviame: etiqueta guardada {ruta}")
+                    estado = "Impreso"
+            except Exception as exc:  # noqa: BLE001
+                msg_lower = str(exc).lower()
+                if plataforma == "walmart" and "rechazado" in msg_lower:
+                    print(f"API ({plataforma}) fallo: envio {codigo_venta} rechazado por courier.")
+                    mensajes.append(
+                        (
+                            "info",
+                            "Etiqueta Walmart NO creada",
+                            "Etiqueta Walmart NO creada, informar a Wendy el numero de envio",
+                        )
+                    )
+                    estado = "Error"
+                elif plataforma == "walmart" and (
+                    "no se pudo obtener etiqueta" in msg_lower or "no generadas" in msg_lower
+                ):
+                    print(f"API ({plataforma}) fallo: etiquetas no creadas en Walmart/Enviame para {codigo_venta}")
+                    mensajes.append(
+                        (
+                            "info",
+                            "Etiquetas incompletas en Walmart",
+                            "Walmart aun no crea todas las etiquetas, avisar a Wendy",
+                        )
+                    )
+                    estado = "Error Sin Etiquetas"
+                elif plataforma == "ripley" and ("404" in msg_lower or "no existe ninguna instancia" in msg_lower):
+                    print(f"API ({plataforma}) fallo: pedido sin etiquetas en Enviame para {codigo_venta} -> {exc}")
+                    mensajes.append(
+                        (
+                            "info",
+                            "Pedido sin etiquetas",
+                            "El pedido no esta creado en Enviame, avisar a Wendy.",
+                        )
+                    )
+                    estado = "Error Sin Etiquetas"
+                else:
+                    print(f"API ({plataforma}) fallo:", exc)
+                    estado = "Error"
+    except Exception as exc:  # noqa: BLE001
+        print("Error inesperado al obtener etiqueta:", exc)
+        mensajes.append(("error", "Error al obtener etiqueta", str(exc)))
+        estado = "Error"
+
+    return {"estado": estado, "mensajes": mensajes, "codigo_registro": codigo_registro}
+
+
+class ImpresionWorker(QObject):
+    finished = pyqtSignal(dict)
+
+    def __init__(
+        self,
+        plataforma: str,
+        codigo_venta: str,
+        codigo_mostrado: str,
+        total_productos: int,
+        nombre_cliente: str,
+    ) -> None:
+        super().__init__()
+        self.plataforma = plataforma
+        self.codigo_venta = codigo_venta
+        self.codigo_mostrado = codigo_mostrado
+        self.total_productos = total_productos
+        self.nombre_cliente = nombre_cliente
+
+    def run(self) -> None:
+        resultado = _descargar_etiqueta_en_segundo_plano(
+            self.plataforma,
+            self.codigo_venta,
+            self.codigo_mostrado,
+            self.total_productos,
+            self.nombre_cliente,
+        )
+        self.finished.emit(resultado)
 
 
 class LineaCodigoFija(QLineEdit):
@@ -92,6 +303,12 @@ class VerificacionTab(QWidget):
         self.codigo_actual_busqueda = ""
         self.nombre_cliente_actual = ""
         self._last_files_signature = None
+        self._requiere_escaneo_habilitados = False
+        self._auto_impresion_pendiente = False
+        self._alerta_inventario_mostrada = False
+        self._imprimiendo = False
+        self._impresion_thread: Optional[QThread] = None
+        self._impresion_worker: Optional[ImpresionWorker] = None
         self.rutas = resolver_rutas_multivende(self.config)
 
         self._build_ui()
@@ -210,7 +427,7 @@ class VerificacionTab(QWidget):
         self.btn_generar_salida = QPushButton("Generar Salida")
         self.btn_imprimir = QPushButton("Imprimir etiqueta")
         self.btn_generar_salida.clicked.connect(self.generar_salida)
-        self.btn_imprimir.clicked.connect(self.imprimir_etiqueta_automatica)
+        self.btn_imprimir.clicked.connect(lambda: self.imprimir_etiqueta_automatica(manual=True))
         pie.addStretch()
         pie.addWidget(self.btn_generar_salida)
         pie.addWidget(self.btn_imprimir)
@@ -364,6 +581,8 @@ class VerificacionTab(QWidget):
             }
         )
         self.df_tabla = df.copy()
+        self._requiere_escaneo_habilitados = False
+        self._auto_impresion_pendiente = False
 
         self.mostrar_tabla(df)
         self.txt_incorrectos.setText("")
@@ -477,10 +696,22 @@ class VerificacionTab(QWidget):
 
         self.tabla.resizeColumnsToContents()
 
-    def imprimir_etiqueta_automatica(self):
-        self._set_estado_impresion("Imprimiendo...")
-        self.btn_imprimir.setEnabled(False)
-        QApplication.processEvents()
+    def imprimir_etiqueta_automatica(self, manual: bool = False):
+        if self._imprimiendo:
+            print("Impresion en curso, se ignora nueva solicitud de impresion.")
+            return
+
+        if self._requiere_escaneo_habilitados and not self._escaneo_completo():
+            if manual:
+                QMessageBox.warning(
+                    self,
+                    "Escaneo requerido",
+                    "Debe escanear todos los productos habilitados antes de imprimir la etiqueta.",
+                )
+            else:
+                if self.lbl_estado_impresion.text().strip().lower() in {"no impreso", ""}:
+                    self._set_estado_impresion("Requiere escaneo")
+            return
 
         codigo_mostrado = self.codigo_actual_mostrado or self.lbl_codigo.text().replace("Código venta:", "").strip()
         codigo_venta = self.codigo_actual_busqueda or codigo_mostrado
@@ -504,158 +735,72 @@ class VerificacionTab(QWidget):
             QMessageBox.warning(self, "Canal desconocido", f"No se reconoce el canal: {canal}")
             return
 
-        estado = "Error"
+        self._set_estado_impresion("Imprimiendo...")
+        self.btn_imprimir.setEnabled(False)
+        self._imprimiendo = True
 
-        # --- WooCommerce via API Zipnova ---
-        if plataforma == "woocommerce":
-            external_id = codigo_mostrado or codigo_venta
-            if external_id and not str(external_id).upper().startswith("W"):
-                external_id = f"W{external_id}"
-            try:
-                etiqueta_path = descargar_etiqueta_zipnova_por_external_id(external_id, fmt="zpl")
-                print(f"Woo/Zipnova: Etiqueta API guardada en {etiqueta_path}")
-                estado = "Impreso"
-            except Exception as exc:  # noqa: BLE001
-                print("Woo/Zipnova: Error al obtener etiqueta via API:", exc)
-                msg_lower = str(exc).lower()
-                if "external_id" in msg_lower or "no se encontraron env" in msg_lower:
-                    estado = "Error Pedido Procesando"
-                    QMessageBox.information(
-                        self,
-                        "Etiqueta aun no completa",
-                        "La etiqueta no esta en estado 'Completa' en la tienda online o es Recogida Local; avisar a Wendy.",
-                    )
+        total_productos = getattr(self, "total_productos_actual", 0)
+        thread = QThread()
+        worker = ImpresionWorker(
+            plataforma=plataforma,
+            codigo_venta=codigo_venta,
+            codigo_mostrado=codigo_mostrado,
+            total_productos=total_productos,
+            nombre_cliente=self.nombre_cliente_actual or "",
+        )
+        self._impresion_thread = thread
+        self._impresion_worker = worker
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_impresion_finalizada)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_impresion_thread_finalizada)
+        try:
+            thread.start()
+        except Exception as exc:  # noqa: BLE001
+            print("No se pudo iniciar el hilo de impresion:", exc)
+            self._set_estado_impresion("Error")
+            self.btn_imprimir.setEnabled(True)
+            self._imprimiendo = False
+
+    def _on_impresion_finalizada(self, resultado: dict):
+        try:
+            datos = resultado or {}
+            estado = datos.get("estado") or "Error"
+            codigo_registro = datos.get("codigo_registro") or ""
+            mensajes = datos.get("mensajes") or []
+
+            self._set_estado_impresion(estado)
+            if codigo_registro:
+                self._registrar_impresion(codigo_registro, estado)
+            for tipo, titulo, texto in mensajes:
+                if tipo == "warning":
+                    QMessageBox.warning(self, titulo, texto)
+                elif tipo == "error":
+                    QMessageBox.critical(self, titulo, texto)
                 else:
-                    estado = "Error"
+                    QMessageBox.information(self, titulo, texto)
+            if hasattr(self, "df_tabla"):
+                self.mostrar_tabla(self.df_tabla)
+        except Exception as exc:  # noqa: BLE001
+            print("Error al procesar resultado de impresion:", exc)
+            self._set_estado_impresion("Error")
+        finally:
+            self.btn_imprimir.setEnabled(True)
+            self._imprimiendo = False
 
-        # --- MercadoLibre via API ---
-        elif plataforma == "mercadolibre":
-            try:
-                etiqueta_path = descargar_etiqueta_mercadolibre(order_id=codigo_venta, response_type="zpl2")
-                print(f"M: Etiqueta API guardada en {etiqueta_path}")
-                estado = "Impreso"
-            except NonPrintableError as exc:
-                QMessageBox.information(
-                    self,
-                    "Etiqueta se emitira en la tarde o manana",
-                    f"Mercado Libre indica que este envio es para entregar a la colecta manana.\n{exc}",
-                )
-                estado = "Error Colecta Manana"
-                print(f"M: Etiqueta API no emitida (colecta manana) para {codigo_venta}")
-            except Exception as exc:  # noqa: BLE001
-                msg = str(exc)
-                if "INVALID_SHIPMENT_MODE" in msg or "ME1" in msg:
-                    print("M: Shipment ME1, intentando via Zipnova (API)...")
-                    try:
-                        shipping_id = obtener_shipping_id(codigo_venta)
-                        etiqueta_path = descargar_etiqueta_zipnova_por_external_id(
-                            str(shipping_id), fmt="zpl", file_name=codigo_venta
-                        )
-                        print(f"M: Etiqueta Zipnova API guardada en {etiqueta_path} (shipping_id={shipping_id})")
-                        estado = "Impreso"
-                    except Exception as zexc:  # noqa: BLE001
-                        print("M: Error Zipnova API por shipping_id, probando por nombre:", zexc)
-                        try:
-                            etiqueta_path = descargar_etiqueta_zipnova_por_nombre(
-                                nombre_cliente=self.nombre_cliente_actual or "",
-                                fmt="zpl",
-                            )
-                            print(f"M: Etiqueta Zipnova API guardada en {etiqueta_path}")
-                            estado = "Impreso"
-                        except Exception as zexc2:  # noqa: BLE001
-                            print("M: Error Zipnova API por nombre:", zexc2)
-                            estado = "Error"
-                else:
-                    print("M: Error al obtener etiqueta via API:", exc)
-                    estado = "Error"
-
-        # --- Walmart / Paris / Ripley via APIs ---
-        elif plataforma in {"walmart", "paris", "ripley"}:
-            try:
-                if plataforma == "walmart":
-                    stop_una_pagina = (self.total_productos_actual == 1)
-                    rutas = descargar_etiquetas_enviame_por_shipping(codigo_venta, canal="walmart", stop_after_first_match=stop_una_pagina)
-                    # Muestra solo nota de venta + folios (sin ruta completa)
-                    folios = []
-                    for ruta in rutas:
-                        nombre = os.path.splitext(os.path.basename(ruta))[0]
-                        partes = nombre.split("-")
-                        if len(partes) >= 2:
-                            folios.append(partes[1])
-                    folios_unicos = sorted(set(folios))
-                    folios_str = "-".join([f for f in folios_unicos if f])
-                    etiqueta_msg = f"{codigo_venta}-{folios_str}" if folios_str else str(codigo_venta)
-                    print(f"Walmart/Enviame: etiquetas guardadas: {etiqueta_msg}")
-                    try:
-                        resp_labels = marcar_impreso_enviame_por_shipping(
-                            codigo_venta,
-                            canal="walmart",
-                            stop_after_first_match=stop_una_pagina,
-                        )
-                        print(f"Walmart/Enviame: deliveries marcados como impreso: {codigo_venta}")
-                    except Exception as mark_exc:  # noqa: BLE001
-                        print(f"Walmart/Enviame: no se pudo marcar como impreso -> {mark_exc}")
-                    total_folios = len(folios_unicos)
-                    estado = "Impreso"
-                    if total_folios == 0:
-                        estado = "Error Sin Etiquetas"
-                        print(f"Walmart/Enviame: sin etiquetas generadas para {codigo_venta}")
-                    elif total_folios < self.total_productos_actual:
-                        estado = "Error Faltan Etiquetas"
-                        print(
-                            f"Walmart/Enviame: folios obtenidos ({total_folios}) no coinciden con productos ({self.total_productos_actual})"
-                        )
-                    if estado.startswith("Error"):
-                        QMessageBox.information(
-                            self,
-                            "Etiquetas incompletas en Walmart",
-                            "Walmart aun no crea todas las etiquetas, avisar a Wendy",
-                        )
-                elif plataforma == "paris":
-                    ruta = descargar_etiqueta_paris_cencosud(codigo_venta)
-                    print(f"Paris/Cencosud: etiqueta guardada {ruta}")
-                    estado = "Impreso"
-                else:
-                    ruta = descargar_etiqueta_enviame_por_delivery(codigo_venta, canal=plataforma)
-                    print(f"{plataforma.capitalize()}/Enviame: etiqueta guardada {ruta}")
-                    estado = "Impreso"
-            except Exception as exc:  # noqa: BLE001
-                msg_lower = str(exc).lower()
-                if plataforma == "walmart" and "rechazado" in msg_lower:
-                    print(f"API ({plataforma}) fallo: envio {codigo_venta} rechazado por courier.")
-                    QMessageBox.information(
-                        self,
-                        "Etiqueta Walmart NO creada",
-                        "Etiqueta Walmart NO creada, informar a Wendy el numero de envio",
-                    )
-                    estado = "Error"
-                elif plataforma == "walmart" and ("no se pudo obtener etiqueta" in msg_lower or "no generadas" in msg_lower):
-                    print(f"API ({plataforma}) fallo: etiquetas no creadas en Walmart/Enviame para {codigo_venta}")
-                    QMessageBox.information(
-                        self,
-                        "Etiquetas incompletas en Walmart",
-                        "Walmart aun no crea todas las etiquetas, avisar a Wendy",
-                    )
-                    estado = "Error Sin Etiquetas"
-                elif plataforma == "ripley" and ("404" in msg_lower or "no existe ninguna instancia" in msg_lower):
-                    print(f"API ({plataforma}) fallo: pedido sin etiquetas en Enviame para {codigo_venta} -> {exc}")
-                    QMessageBox.information(
-                        self,
-                        "Pedido sin etiquetas",
-                        "El pedido no esta creado en Enviame, avisar a Wendy.",
-                    )
-                    estado = "Error Sin Etiquetas"
-                else:
-                    print(f"API ({plataforma}) fallo:", exc)
-                    estado = "Error"
-        # Estado en UI
-        self._set_estado_impresion(estado)
-
-        self._registrar_impresion(codigo_mostrado or codigo_venta, estado)
-        self.btn_imprimir.setEnabled(True)
-
-        if hasattr(self, "df_tabla"):
-            self.mostrar_tabla(self.df_tabla)
+    def _on_impresion_thread_finalizada(self):
+        """
+        Limpia referencias del hilo una vez detenido para evitar destruccion prematura.
+        """
+        try:
+            if self._impresion_thread and self._impresion_thread.isRunning():
+                self._impresion_thread.wait(100)
+        finally:
+            self._impresion_thread = None
+            self._impresion_worker = None
 
     def generar_salida(self):
         if getattr(self, "df_tabla", None) is None or self.df_tabla.empty:
@@ -773,6 +918,11 @@ class VerificacionTab(QWidget):
         df_registro = pd.concat([df_registro, nuevo], ignore_index=True)
         df_registro.to_excel(registro_path, index=False)
         forzar_columnas_texto_excel(registro_path, df_registro.columns, ["CódigoVenta"])
+
+    def _escaneo_completo(self) -> bool:
+        if getattr(self, "df_tabla", None) is None or self.df_tabla.empty:
+            return False
+        return bool((self.df_tabla["Escaneado"] >= self.df_tabla["Cantidad"]).all())
 
     def _normalizar_codigo(self, codigo: str) -> str:
         if codigo is None:
