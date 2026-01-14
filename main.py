@@ -2,7 +2,6 @@ import json
 import os
 import sys
 
-from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication, QMainWindow, QMessageBox, QMenu, QMenuBar, QTabWidget
 
 from tab_bodegas import BodegasTab
@@ -35,7 +34,6 @@ class VentanaPrincipal(QMainWindow):
 
         self._crear_menu()
         self._crear_tabs()
-        self._configurar_actualizacion()
 
         self.tabs.currentChanged.connect(self._enfocar_codigo_si_principal)
 
@@ -78,11 +76,6 @@ class VentanaPrincipal(QMainWindow):
         self.menu_accion_cargar.triggered.connect(self.verificacion_tab.cargar_excel)
         self.verificacion_tab.cargar_excel(mostrar_mensaje=False)
         self._enfocar_codigo_si_principal(self.tabs.currentIndex())
-
-    def _configurar_actualizacion(self):
-        self.timer_actualizacion = QTimer(self)
-        self.timer_actualizacion.timeout.connect(lambda: self.verificacion_tab.cargar_excel(mostrar_mensaje=False))
-        self.timer_actualizacion.start(60_000)
 
     def _enfocar_codigo_si_principal(self, index):  # noqa: ARG002
         es_verificacion = self.tabs.currentWidget() is self.verificacion_tab
