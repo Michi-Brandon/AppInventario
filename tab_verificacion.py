@@ -556,15 +556,18 @@ class VerificacionTab(QWidget):
         self.codigo_actual_mostrado = codigo_original
         self.codigo_actual_busqueda = codigo_busqueda
         self.lbl_codigo.setText(f"Código venta: {codigo_original}")
-        self.nombre_cliente_actual = str(filas.iloc[0, 9])
+        cliente_col = self._buscar_columna_por_nombre(filas, ["Cliente", "Nombre cliente", "Nombre Cliente"])
+        self.nombre_cliente_actual = str(filas.iloc[0, 9]) if not cliente_col else str(filas.iloc[0][cliente_col])
 
         self.df_actual = filas.copy()
         self.df_actual["Escaneado"] = 0
 
-        cliente = str(filas.iloc[0, 9])
+        cliente = self.nombre_cliente_actual
         canal = str(filas.iloc[0, 5])
         self.total_productos_actual = 0
-        total_cantidad = int(pd.to_numeric(filas.iloc[:, 14], errors="coerce").fillna(0).sum())
+        cantidad_col = self._buscar_columna_por_nombre(filas, ["Cantidad"])
+        cantidad_series = filas[cantidad_col] if cantidad_col else filas.iloc[:, 14]
+        total_cantidad = int(pd.to_numeric(cantidad_series, errors="coerce").fillna(0).sum())
         self.total_productos_actual = total_cantidad
 
         self.lbl_cliente.setText(f"Cliente: {cliente}")
@@ -572,11 +575,17 @@ class VerificacionTab(QWidget):
         self.lbl_productos.setText(f"Productos: {total_cantidad}")
         self.lbl_escaneados.setText("Escaneados: 0")
 
+        cantidad_tabla = pd.to_numeric(cantidad_series, errors="coerce").fillna(0).astype(int)
+        codigo_col = self._buscar_columna_por_nombre(filas, ["SKU padre", "SKU Padre", "Sku padre"])
+        nombre_col = self._buscar_columna_por_nombre(filas, ["Producto", "Nombre Producto"])
+        codigo_series = filas[codigo_col] if codigo_col else filas.iloc[:, 10]
+        nombre_series = filas[nombre_col] if nombre_col else filas.iloc[:, 12]
+
         df = pd.DataFrame(
             {
-                "Código Producto": filas.iloc[:, 11].astype(str),
-                "Nombre Producto": filas.iloc[:, 12].astype(str),
-                "Cantidad": filas.iloc[:, 14].astype(int),
+                "Código Producto": codigo_series.astype(str),
+                "Nombre Producto": nombre_series.astype(str),
+                "Cantidad": cantidad_tabla,
                 "Escaneado": 0,
             }
         )
@@ -918,6 +927,14 @@ class VerificacionTab(QWidget):
         df_registro = pd.concat([df_registro, nuevo], ignore_index=True)
         df_registro.to_excel(registro_path, index=False)
         forzar_columnas_texto_excel(registro_path, df_registro.columns, ["CódigoVenta"])
+
+    def _buscar_columna_por_nombre(self, df: pd.DataFrame, candidatos: list[str]) -> Optional[str]:
+        columnas_lower = {str(c).strip().lower(): str(c) for c in df.columns}
+        for candidato in candidatos:
+            key = str(candidato).strip().lower()
+            if key in columnas_lower:
+                return columnas_lower[key]
+        return None
 
     def _escaneo_completo(self) -> bool:
         if getattr(self, "df_tabla", None) is None or self.df_tabla.empty:
