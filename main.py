@@ -1,4 +1,4 @@
-import json
+﻿import json
 import os
 import sys
 
@@ -40,7 +40,7 @@ class VentanaPrincipal(QMainWindow):
     def _crear_menu(self):
         barra = QMenuBar(self)
         menu_archivo = QMenu("Archivo", self)
-        act_cargar = menu_archivo.addAction("Cargar Multivende (\u00faltimo archivo)")
+        act_cargar = menu_archivo.addAction("Cargar Multivende (ultimo archivo)")
         # Se conecta mas adelante cuando verificacion esta disponible.
         self.menu_accion_cargar = act_cargar
         barra.addMenu(menu_archivo)
@@ -68,7 +68,7 @@ class VentanaPrincipal(QMainWindow):
         self.bodegas_tab = BodegasTab(self)
         self.stock_tab = StockTab(self.config, self)
 
-        self.tabs.addTab(self.verificacion_tab, "Verificaci\u00f3n de pedidos")
+        self.tabs.addTab(self.verificacion_tab, "Verificacion de pedidos")
         self.tabs.addTab(self.multivende_tab, "Datos Multivende")
 
         self.menu_accion_cargar.triggered.connect(self.verificacion_tab.cargar_excel)
