@@ -17,6 +17,8 @@ class VentanaPrincipal(QMainWindow):
         super().__init__()
         self.setWindowTitle("Verificador de Pedidos - AuraHome")
         self.resize(1200, 700)
+        self._tabs_bloqueados = {2, 3, 4, 5}
+        self._tab_activo = 0
 
         if getattr(sys, "frozen", False):
             base_path = os.path.dirname(sys.executable)
@@ -35,13 +37,14 @@ class VentanaPrincipal(QMainWindow):
         self._crear_menu()
         self._crear_tabs()
 
-        self.tabs.currentChanged.connect(self._enfocar_codigo_si_principal)
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        self.tabs.tabBarClicked.connect(self._on_tab_clicked)
 
     def _crear_menu(self):
         barra = QMenuBar(self)
         menu_archivo = QMenu("Archivo", self)
-        act_cargar = menu_archivo.addAction("Cargar Multivende (ultimo archivo)")
-        # Se conecta mas adelante cuando verificacion esta disponible.
+        act_cargar = menu_archivo.addAction("Cargar Multivende (último archivo)")
+        # Se conecta más adelante cuando verificación está disponible.
         self.menu_accion_cargar = act_cargar
         barra.addMenu(menu_archivo)
         self.setMenuBar(barra)
@@ -50,8 +53,6 @@ class VentanaPrincipal(QMainWindow):
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
 
-        # Se mantienen instanciados para no romper callbacks internos,
-        # pero no se agregan al QTabWidget principal.
         self.multivende_tab = MultivendeTab(self)
         self.movimientos_tab = MovimientosTab(self.config, self)
         self.verificacion_tab = VerificacionTab(
@@ -68,8 +69,12 @@ class VentanaPrincipal(QMainWindow):
         self.bodegas_tab = BodegasTab(self)
         self.stock_tab = StockTab(self.config, self)
 
-        self.tabs.addTab(self.verificacion_tab, "Verificacion de pedidos")
+        self.tabs.addTab(self.verificacion_tab, "Verificación de pedidos")
         self.tabs.addTab(self.multivende_tab, "Datos Multivende")
+        self.tabs.addTab(self.movimientos_tab, "Movimientos del día")
+        self.tabs.addTab(self.entradas_tab, "Entradas de productos")
+        self.tabs.addTab(self.bodegas_tab, "Movimientos entre bodegas")
+        self.tabs.addTab(self.stock_tab, "Stock de productos")
 
         self.menu_accion_cargar.triggered.connect(self.verificacion_tab.cargar_excel)
         self.verificacion_tab.cargar_excel(mostrar_mensaje=False)
@@ -83,6 +88,20 @@ class VentanaPrincipal(QMainWindow):
         if self.tabs.currentWidget() is self.stock_tab:
             self.stock_tab.actualizar_stock()
             self.stock_tab.enfocar_busqueda()
+
+    def _on_tab_clicked(self, index):
+        if index in self._tabs_bloqueados:
+            self.tabs.setCurrentIndex(self._tab_activo)
+
+    def _on_tab_changed(self, index):
+        if index in self._tabs_bloqueados:
+            self.tabs.blockSignals(True)
+            self.tabs.setCurrentIndex(self._tab_activo)
+            self.tabs.blockSignals(False)
+            return
+
+        self._tab_activo = index
+        self._enfocar_codigo_si_principal(index)
 
 
 if __name__ == "__main__":
